@@ -989,3 +989,7 @@ herdr terminal condition w1:p1 > condition.json
 herdr terminal rename-if --condition condition.json --label worker
 herdr terminal close-if --condition condition.json
 ```
+
+Runtime launch IDs use 256 bits of operating-system entropy, without a clock, PID or process-local counter fallback.
+They correlate a runtime and are not authentication secrets or permission grants.
+If entropy allocation fails, guarded operations return `terminal_identity_unavailable`; unguarded terminals and imported processes remain usable.

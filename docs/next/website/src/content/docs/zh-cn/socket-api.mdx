@@ -791,3 +791,7 @@ herdr terminal condition w1:p1 > condition.json
 herdr terminal rename-if --condition condition.json --label worker
 herdr terminal close-if --condition condition.json
 ```
+
+启动 ID 使用来自操作系统的 256 位熵，不会退回时钟、PID 或进程内计数器。
+ID 用于关联运行时，不是认证秘密，也不授予权限。
+如果熵分配失败，保护操作返回 `terminal_identity_unavailable`，但普通终端操作与导入的进程仍可使用。

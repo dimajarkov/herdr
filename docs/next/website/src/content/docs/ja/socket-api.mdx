@@ -797,3 +797,7 @@ herdr terminal condition w1:p1 > condition.json
 herdr terminal rename-if --condition condition.json --label worker
 herdr terminal close-if --condition condition.json
 ```
+
+起動 ID は OS のエントロピー 256 ビットを使用し、時計、PID、プロセス内カウンターへの代替はありません。
+ID はランタイムの対応付けに使用され、認証シークレットや権限の付与ではありません。
+エントロピー取得が失敗すると保護操作は `terminal_identity_unavailable` を返しますが、従来の端末操作やインポートされたプロセスは引き続き使用できます。

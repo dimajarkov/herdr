@@ -6,18 +6,36 @@ use crate::api::schema::{
 use crate::app::App;
 
 impl App {
-    fn current_terminal_condition(&self, pane: &str) -> Option<TerminalCondition> {
+    fn current_terminal_condition(&self, pane: &str) -> Result<TerminalCondition, &'static str> {
         // Never follow a stale pane alias to its new location.
-        let (ws_idx, pane_id) = self.parse_current_public_pane_id(pane)?;
-        let ws = self.state.workspaces.get(ws_idx)?;
-        let terminal_id = ws.terminal_id(pane_id)?;
-        let runtime = self.terminal_runtimes.get(terminal_id)?;
-        let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
-        Some(TerminalCondition {
-            pane_id: self.public_pane_id(ws_idx, pane_id)?,
-            tab_id: self.public_tab_id(ws_idx, tab_idx)?,
+        let (ws_idx, pane_id) = self
+            .parse_current_public_pane_id(pane)
+            .ok_or("terminal_not_found")?;
+        let ws = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .ok_or("terminal_not_found")?;
+        let terminal_id = ws.terminal_id(pane_id).ok_or("terminal_not_found")?;
+        let runtime = self
+            .terminal_runtimes
+            .get(terminal_id)
+            .ok_or("terminal_not_found")?;
+        let tab_idx = ws
+            .find_tab_index_for_pane(pane_id)
+            .ok_or("terminal_not_found")?;
+        Ok(TerminalCondition {
+            pane_id: self
+                .public_pane_id(ws_idx, pane_id)
+                .ok_or("terminal_not_found")?,
+            tab_id: self
+                .public_tab_id(ws_idx, tab_idx)
+                .ok_or("terminal_not_found")?,
             terminal_id: terminal_id.to_string(),
-            launch_id: runtime.launch_id().to_string(),
+            launch_id: runtime
+                .launch_id()
+                .ok_or("terminal_identity_unavailable")?
+                .to_string(),
         })
     }
 
@@ -26,19 +44,22 @@ impl App {
         condition: &TerminalCondition,
     ) -> Result<(), &'static str> {
         match self.current_terminal_condition(&condition.pane_id) {
-            None => Err("terminal_not_found"),
-            Some(current) if current == *condition => Ok(()),
-            Some(_) => Err("stale_terminal_condition"),
+            Err(code) => Err(code),
+            Ok(current) if current == *condition => Ok(()),
+            Ok(_) => Err("stale_terminal_condition"),
         }
     }
 
     pub(super) fn handle_terminal_condition(&self, id: String, target: PaneTarget) -> String {
-        let Some(condition) = self.current_terminal_condition(&target.pane_id) else {
-            return encode_error(
-                id,
-                "terminal_not_found",
-                "current pane has no live terminal runtime",
-            );
+        let condition = match self.current_terminal_condition(&target.pane_id) {
+            Ok(condition) => condition,
+            Err(code) => {
+                return encode_error(
+                    id,
+                    code,
+                    "current pane has no verifiable live terminal runtime identity",
+                )
+            }
         };
         encode_success(
             id,
@@ -435,5 +456,94 @@ mod tests {
             "terminal.close_if",
             json!({"condition":condition}),
         );
+    }
+    #[tokio::test]
+    async fn conditional_terminal_independent_runtime_ids_use_full_random_nonces() {
+        let (mut first, first_pane) = app();
+        let (mut second, second_pane) = app();
+        let first = request(
+            &mut first,
+            "terminal.condition",
+            json!({"pane_id":first_pane}),
+        )["result"]["condition"]
+            .clone();
+        let second = request(
+            &mut second,
+            "terminal.condition",
+            json!({"pane_id":second_pane}),
+        )["result"]["condition"]
+            .clone();
+        for condition in [&first, &second] {
+            let nonce = condition["launch_id"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("runtime_")
+                .expect("OS-random runtime nonce prefix");
+            assert_eq!(nonce.len(), 64, "256-bit runtime identity");
+            assert!(nonce.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        assert_ne!(first["launch_id"], second["launch_id"]);
+    }
+
+    #[tokio::test]
+    async fn conditional_terminal_entropy_failure_preserves_unguarded_runtime() {
+        let (mut app, pane) = app();
+        let old = request(&mut app, "terminal.condition", json!({"pane_id":pane}))["result"]
+            ["condition"]
+            .clone();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        let (runtime, mut input) =
+            crate::terminal::TerminalRuntime::test_with_entropy_unavailable(80, 24);
+        app.terminal_runtimes.insert(terminal, runtime);
+        assert_eq!(
+            request(&mut app, "terminal.condition", json!({"pane_id":pane}))["error"]["code"],
+            "terminal_identity_unavailable"
+        );
+        for (method, params) in [
+            ("terminal.close_if", json!({"condition":old})),
+            (
+                "terminal.rename_if",
+                json!({"condition":old,"label":"forbidden"}),
+            ),
+            (
+                "terminal.input_if",
+                json!({"condition":old,"text":"forbidden"}),
+            ),
+        ] {
+            assert_eq!(
+                request(&mut app, method, params)["error"]["code"],
+                "terminal_identity_unavailable"
+            );
+        }
+        assert_ne!(
+            request(&mut app, "pane.get", json!({"pane_id":pane}))["result"]["pane"]["label"],
+            "forbidden"
+        );
+        assert!(input.try_recv().is_err());
+        assert_eq!(
+            request(
+                &mut app,
+                "pane.send_text",
+                json!({"pane_id":pane,"text":"ordinary input remains usable"})
+            )["result"]["type"],
+            "ok"
+        );
+        assert_eq!(
+            input.recv().await.unwrap().as_ref(),
+            b"ordinary input remains usable"
+        );
+        assert_eq!(
+            request(
+                &mut app,
+                "pane.rename",
+                json!({"pane_id":pane,"label":"unguarded remains usable"})
+            )["result"]["pane"]["label"],
+            "unguarded remains usable"
+        );
+        app.state.assert_invariants_for_test();
     }
 }

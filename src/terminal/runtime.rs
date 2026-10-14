@@ -14,16 +14,40 @@ use crate::layout::PaneId;
 /// The PTY implementation still delegates to the legacy pane runtime while the
 /// migration proceeds, but production code now depends on this terminal-layer
 /// type instead of the pane module's implementation detail.
-pub struct TerminalRuntime(crate::pane::PaneRuntime, super::TerminalId);
+pub struct TerminalRuntime(crate::pane::PaneRuntime, Option<String>);
 
 impl TerminalRuntime {
     fn new(runtime: crate::pane::PaneRuntime) -> Self {
-        Self(runtime, super::TerminalId::alloc())
+        Self::new_with_entropy(runtime, getrandom::fill)
+    }
+
+    fn new_with_entropy(
+        runtime: crate::pane::PaneRuntime,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
+    ) -> Self {
+        let mut entropy = [0u8; 32];
+        let launch_id = match fill(&mut entropy) {
+            Ok(()) => {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let mut id = String::with_capacity(72);
+                id.push_str("runtime_");
+                for byte in entropy {
+                    id.push(char::from(HEX[usize::from(byte >> 4)]));
+                    id.push(char::from(HEX[usize::from(byte & 15)]));
+                }
+                Some(id)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "OS entropy unavailable; guarded terminal lifecycle disabled for this runtime");
+                None
+            }
+        };
+        Self(runtime, launch_id)
     }
 
     /// Live runtime identity. Fresh after spawn, restart, or imported handoff.
-    pub(crate) fn launch_id(&self) -> &str {
-        self.1.as_str()
+    pub(crate) fn launch_id(&self) -> Option<&str> {
+        self.1.as_deref()
     }
 
     pub fn shutdown(self) {
@@ -638,6 +662,17 @@ impl TerminalRuntime {
         bytes: Vec<u8>,
     ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
         self.0.test_contend_during_dirty_collection(bytes)
+    }
+
+    pub(crate) fn test_with_entropy_unavailable(
+        cols: u16,
+        rows: u16,
+    ) -> (Self, mpsc::Receiver<Bytes>) {
+        let (runtime, rx) = crate::pane::PaneRuntime::test_with_channel(cols, rows);
+        (
+            Self::new_with_entropy(runtime, |_| Err(getrandom::Error::UNSUPPORTED)),
+            rx,
+        )
     }
 
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
