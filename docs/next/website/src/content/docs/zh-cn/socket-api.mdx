@@ -795,3 +795,25 @@ herdr terminal close-if --condition condition.json
 启动 ID 使用来自操作系统的 256 位熵，不会退回时钟、PID 或进程内计数器。
 ID 用于关联运行时，不是认证秘密，也不授予权限。
 如果熵分配失败，保护操作返回 `terminal_identity_unavailable`，但普通终端操作与导入的进程仍可使用。
+
+## 托管任务与协作控制
+
+`terminal.job.capabilities` 公布 version 1 的任务所有权与协作控制能力。初始仅支持 macOS；不支持时在启动前拒绝，不回退到传统 PTY 输入。`terminal.job.launch` 接受 `{parent, argv, cwd, env, direction, label?}`，创建新的直接执行终端。所有权覆盖该任务资源内的所有进程，直到显式释放。移动、重启或替换终端会使权限失效；人工输入不会自动释放。
+
+`JobCondition` 为 `{terminal: TerminalCondition, job_id}`。`terminal.job.get/close/release` 接受 `{condition}`，`rename` 还接受 `label`。close 保留现有关闭保护。release 撤销注册与控制并保留终端，迟到的退出事件不会删除它。退出记录与保护拒绝保存在 `exit` 和 `diagnostic`；记录有容量限制且不跨服务器重启。
+
+控制使用仅注入子进程环境的一次性注册能力，并验证同一本地 JSON 套接字的内核 PID、UID、进程出生标记及其原始终端归属。注册后的 `{job, connection, epoch, session}` 不可变。首次有效原生观察前、断开后或会话变化后均不能发送。不支持重连、继任进程重新注册或 PTY 回退。
+
+`agent.control.prompt/abort/status/ack/observe` 关联原始连接、外部请求 ID 和原生 UUID。abort 只针对当前观察的原生 scope，子进程在调用前再次检查；初始或人工发起的请求同样适用。不能用文本相等或通用完成事件确认操作。busy 的准备阶段可能没有可中止的 scope。
+
+必需的公开 SDK 能力为 `input_request_lifecycle_v1`、`message_admission_v1` 和 `external_request_correlation_v1`。Pi 必须检查声明的原生依赖和补丁，不能替换为未修改 SDK。自定义消息 prompt 不经过普通 slash/template/input 转换。控制帧限制为 16KiB，写入限制为 5 秒，期限为 1..30000ms。`queued` 不表示原生接受或完成。超时或断开产生 `outcome_unknown`，禁止自动重试；已经写入的工作仍可能在同一原始路由上执行，release 不能撤销已接受的工作。
+
+显式释放使用 `herdr terminal job release --condition job.json`；状态查询用 `get`，保护关闭用 `close`，能力查询用 `capabilities`。条件文件可为 `JobCondition` 或完整启动/查询响应。旧服务器缺少独立方法时安全拒绝。已有 terminal-runtime 条件不足以提供代理进程替换保护。
+
+version 1 的托管资源（包括已释放但保留的终端）不支持 live handoff，返回 `managed_handoff_unsupported`，普通端点不受影响。原始运行时消失 30 分钟后记录过期；仍存在的资源不会被淘汰。父终端缩放时在分配前拒绝启动，不自动取消缩放或切换焦点。
+
+通用 JSON 首帧读取与分类保留既有 1MiB 限制。所有新增 managed/control 请求在分派前拒绝超过 16KiB 的帧，注册后流使用相同限制。不合法请求仅提供行列位置和有长度限制的关联 ID，不回显原始输入。
+
+初始原进程证明不可用或 30 秒注册期限已过时，返回 `enrollment_failed` 和可操作诊断，仍保留受保护的 close/release/rename 所有权。这与注册后连接丢失不同；后者保留终端并报告路由丢失。
+
+托管终端清理只关闭其持有的 PTY actor 与句柄，由内核挂断该终端，不枚举或向可复用的数字 PID 发信号。此不可变策略在释放和移动后保持；不保证强制终止已脱离或忽略挂断的后代，普通终端清理不变。

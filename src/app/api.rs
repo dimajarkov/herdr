@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 mod agent_view;
 mod agents;
 mod conditional_terminals;
+mod control;
+mod cooperative;
 mod env;
 mod integrations;
 mod layouts;
@@ -91,6 +93,18 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let ev = match ev {
+            AppEvent::ManagedJobExited {
+                job_id,
+                pane_id,
+                code,
+                exit_reason,
+            } => {
+                self.handle_managed_job_exit(job_id, pane_id, code, exit_reason);
+                return Vec::new();
+            }
+            ev => ev,
+        };
         let mut worktree_restore_failed = false;
         let ev = match ev {
             AppEvent::WorktreeRuntimeRestoreFailed {
@@ -544,6 +558,13 @@ impl App {
             return RuntimeExitAction::ClosePane;
         };
 
+        let runtime = self.terminal_runtimes.get(&terminal.id);
+        if self
+            .managed_jobs
+            .is_runtime(terminal.id.as_str(), runtime.and_then(|r| r.launch_id()))
+        {
+            return RuntimeExitAction::ClosePane;
+        }
         if terminal.respawn_shell_on_exit || self.should_respawn_shell_after_agent_exit(terminal) {
             RuntimeExitAction::RespawnShell
         } else {
@@ -794,6 +815,17 @@ impl App {
     }
 
     pub(super) fn emit_event(&mut self, event: crate::api::schema::EventEnvelope) {
+        if matches!(
+            event.event,
+            crate::api::schema::EventKind::PaneMoved
+                | crate::api::schema::EventKind::PaneClosed
+                | crate::api::schema::EventKind::WorkspaceClosed
+                | crate::api::schema::EventKind::TabMoved
+                | crate::api::schema::EventKind::TabClosed
+                | crate::api::schema::EventKind::LayoutUpdated
+        ) {
+            self.refresh_managed_jobs();
+        }
         self.run_plugin_event_hooks(&event);
         self.event_hub.push(event);
     }
@@ -930,16 +962,73 @@ impl App {
         self.handle_api_request_after_internal_events_drained(request)
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_api_request_after_internal_events_drained(
         &mut self,
         request: crate::api::schema::Request,
     ) -> String {
+        self.handle_api_request_after_internal_events_drained_with_control(request, None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_api_request_with_control(
+        &mut self,
+        request: crate::api::schema::Request,
+        control: Option<crate::api::ControlConnection>,
+    ) -> String {
+        self.drain_all_internal_events();
+        self.handle_api_request_after_internal_events_drained_with_control(request, control)
+    }
+
+    pub(crate) fn handle_api_request_after_internal_events_drained_with_control(
+        &mut self,
+        request: crate::api::schema::Request,
+        control: Option<crate::api::ControlConnection>,
+    ) -> String {
+        if crate::api::schema::is_managed_control_method_name(request.method.operation().name)
+            && request.id.len() > 512
+        {
+            return responses::encode_error(
+                String::new(),
+                "invalid_control_id",
+                "managed/control correlation id exceeds its bound",
+            );
+        }
+        if crate::api::schema::is_managed_control_method_name(request.method.operation().name)
+            && serde_json::to_vec(&request).map_or(true, |bytes| {
+                bytes.len() >= crate::api::schema::MANAGED_CONTROL_MAX_FRAME_BYTES
+            })
+        {
+            return responses::encode_error(
+                request.id,
+                "control_frame_too_large",
+                "managed/control request exceeds 16KiB; no operation dispatched",
+            );
+        }
+        self.refresh_managed_jobs();
+        if matches!(
+            request.method,
+            crate::api::schema::Method::AgentControlRegister(_)
+                | crate::api::schema::Method::AgentControlPrompt(_)
+                | crate::api::schema::Method::AgentControlAbort(_)
+                | crate::api::schema::Method::AgentControlStatus(_)
+                | crate::api::schema::Method::AgentControlAck(_)
+                | crate::api::schema::Method::AgentControlObserve(_)
+        ) {
+            return self.handle_agent_control(request, control);
+        }
         self.sync_pending_terminal_titles();
         use crate::api::schema::{
             ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse,
         };
 
         let response = match request.method {
+            Method::AgentControlRegister(_)
+            | Method::AgentControlPrompt(_)
+            | Method::AgentControlAbort(_)
+            | Method::AgentControlStatus(_)
+            | Method::AgentControlAck(_)
+            | Method::AgentControlObserve(_) => unreachable!("control methods intercepted"),
             Method::ServerStop(_) => {
                 self.state.should_quit = true;
                 SuccessResponse {
@@ -1140,6 +1229,24 @@ impl App {
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
             Method::AgentSendKeys(params) => {
                 return self.handle_agent_send_keys(request.id, params);
+            }
+            Method::TerminalJobLaunch(params) => {
+                return self.handle_managed_job_launch(request.id, params)
+            }
+            Method::TerminalJobGet(params) => {
+                return self.handle_managed_job_get(request.id, params)
+            }
+            Method::TerminalJobClose(params) => {
+                return self.handle_managed_job_close(request.id, params)
+            }
+            Method::TerminalJobRelease(params) => {
+                return self.handle_managed_job_release(request.id, params)
+            }
+            Method::TerminalJobRename(params) => {
+                return self.handle_managed_job_rename(request.id, params)
+            }
+            Method::TerminalJobCapabilities(_) => {
+                return self.handle_managed_job_capabilities(request.id)
             }
             Method::TerminalCondition(target) => {
                 return self.handle_terminal_condition(request.id, target)

@@ -1228,6 +1228,208 @@
     },
     "request": {
       "$defs": {
+        "AgentCondition": {
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "type": "string"
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "job": {
+              "$ref": "#/schemas/request/$defs/JobCondition"
+            },
+            "session": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job",
+            "connection",
+            "epoch",
+            "session"
+          ],
+          "type": "object"
+        },
+        "AgentControlAbortParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/AgentCondition"
+            },
+            "deadline_ms": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "native_request_id": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "condition",
+            "request_id",
+            "native_request_id",
+            "deadline_ms"
+          ],
+          "type": "object"
+        },
+        "AgentControlAckParams": {
+          "additionalProperties": false,
+          "properties": {
+            "aborted": {
+              "default": null,
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "condition": {
+              "$ref": "#/schemas/request/$defs/AgentCondition"
+            },
+            "error": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "native_request_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "$ref": "#/schemas/request/$defs/ControlPhase"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "condition",
+            "request_id",
+            "phase"
+          ],
+          "type": "object"
+        },
+        "AgentControlObserveParams": {
+          "additionalProperties": false,
+          "properties": {
+            "busy": {
+              "type": "boolean"
+            },
+            "condition": {
+              "$ref": "#/schemas/request/$defs/AgentCondition"
+            },
+            "native_request_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "native_scope_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "condition",
+            "sequence",
+            "native_request_ids",
+            "busy"
+          ],
+          "type": "object"
+        },
+        "AgentControlPromptParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/AgentCondition"
+            },
+            "deadline_ms": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "condition",
+            "request_id",
+            "text",
+            "deadline_ms"
+          ],
+          "type": "object"
+        },
+        "AgentControlRegisterParams": {
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": "string"
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "sdk_features": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "session": {
+              "type": "string"
+            },
+            "version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "capability",
+            "version",
+            "epoch",
+            "session",
+            "sdk_features"
+          ],
+          "type": "object"
+        },
+        "AgentControlStatusParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/AgentCondition"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "condition",
+            "request_id"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -1759,6 +1961,17 @@
           ],
           "type": "object"
         },
+        "ControlPhase": {
+          "enum": [
+            "queued",
+            "received",
+            "accepted",
+            "settled",
+            "rejected",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
         "EmptyParams": {
           "type": "object"
         },
@@ -2195,6 +2408,22 @@
           ],
           "type": "object"
         },
+        "JobCondition": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            },
+            "terminal": {
+              "$ref": "#/schemas/request/$defs/TerminalCondition"
+            }
+          },
+          "required": [
+            "terminal",
+            "job_id"
+          ],
+          "type": "object"
+        },
         "LayoutApplyParams": {
           "properties": {
             "focus": {
@@ -2351,6 +2580,78 @@
           "required": [
             "path",
             "ratio"
+          ],
+          "type": "object"
+        },
+        "ManagedJobParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/JobCondition"
+            }
+          },
+          "required": [
+            "condition"
+          ],
+          "type": "object"
+        },
+        "ManagedJobRenameParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/JobCondition"
+            },
+            "label": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "condition"
+          ],
+          "type": "object"
+        },
+        "ManagedLaunchParams": {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "direction": {
+              "$ref": "#/schemas/request/$defs/SplitDirection"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "label": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parent": {
+              "$ref": "#/schemas/request/$defs/TerminalCondition"
+            }
+          },
+          "required": [
+            "parent",
+            "argv",
+            "cwd",
+            "direction"
           ],
           "type": "object"
         },
@@ -5507,6 +5808,198 @@
         {
           "properties": {
             "method": {
+              "const": "terminal.job.launch",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ManagedLaunchParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.job.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ManagedJobParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.job.close",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ManagedJobParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.job.release",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ManagedJobParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.job.rename",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ManagedJobRenameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.job.capabilities",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.register",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlRegisterParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.prompt",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlPromptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.abort",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlAbortParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.status",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlStatusParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.ack",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlAckParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.control.observe",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentControlObserveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "terminal.condition",
               "type": "string"
             },
@@ -6675,6 +7168,30 @@
     },
     "success_response": {
       "$defs": {
+        "AgentCondition": {
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "type": "string"
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "job": {
+              "$ref": "#/schemas/success_response/$defs/JobCondition"
+            },
+            "session": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job",
+            "connection",
+            "epoch",
+            "session"
+          ],
+          "type": "object"
+        },
         "AgentInfo": {
           "properties": {
             "agent": {
@@ -6924,6 +7441,17 @@
             "applied",
             "partial",
             "failed"
+          ],
+          "type": "string"
+        },
+        "ControlPhase": {
+          "enum": [
+            "queued",
+            "received",
+            "accepted",
+            "settled",
+            "rejected",
+            "outcome_unknown"
           ],
           "type": "string"
         },
@@ -7804,6 +8332,22 @@
           ],
           "type": "object"
         },
+        "JobCondition": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            },
+            "terminal": {
+              "$ref": "#/schemas/success_response/$defs/TerminalCondition"
+            }
+          },
+          "required": [
+            "terminal",
+            "job_id"
+          ],
+          "type": "object"
+        },
         "LayoutDescription": {
           "properties": {
             "focused_pane_id": {
@@ -7908,6 +8452,38 @@
               "type": "object"
             }
           ]
+        },
+        "ManagedExit": {
+          "properties": {
+            "code": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        },
+        "ManagedJobPhase": {
+          "enum": [
+            "awaiting_enrollment",
+            "enrollment_failed",
+            "owned",
+            "released",
+            "moved",
+            "replaced",
+            "exited",
+            "closed"
+          ],
+          "type": "string"
         },
         "NotificationShowReason": {
           "enum": [
@@ -9302,6 +9878,162 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "agent": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/AgentCondition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "busy": {
+                  "type": "boolean"
+                },
+                "condition": {
+                  "$ref": "#/schemas/success_response/$defs/JobCondition"
+                },
+                "diagnostic": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "exit": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/ManagedExit"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "native_request_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "native_scope_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "phase": {
+                  "$ref": "#/schemas/success_response/$defs/ManagedJobPhase"
+                },
+                "type": {
+                  "const": "managed_terminal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "condition",
+                "phase",
+                "native_request_ids",
+                "busy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "cooperative_control": {
+                  "type": "boolean"
+                },
+                "job_ownership": {
+                  "type": "boolean"
+                },
+                "max_frame_bytes": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "required_sdk_features": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "managed_terminal_capabilities",
+                  "type": "string"
+                },
+                "version": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "job_ownership",
+                "cooperative_control",
+                "version",
+                "max_frame_bytes",
+                "required_sdk_features"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "condition": {
+                  "$ref": "#/schemas/success_response/$defs/AgentCondition"
+                },
+                "type": {
+                  "const": "agent_control_registered",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "condition"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "aborted": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "native_request_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "phase": {
+                  "$ref": "#/schemas/success_response/$defs/ControlPhase"
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_control_operation",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "request_id",
+                "phase"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "condition": {

@@ -249,7 +249,10 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self::new)
+        .map(|runtime| match launch_env.managed_launch_id() {
+            Some(id) => Self(runtime, Some(id.to_string())),
+            None => Self::new(runtime),
+        })
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
@@ -621,6 +624,20 @@ impl TerminalRuntime {
 
     pub fn foreground_cwd(&self) -> Option<std::path::PathBuf> {
         self.0.foreground_cwd()
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_pid_shutdown_probe(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.0.test_pid_shutdown_probe()
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_inject_reaped_child_pid(&self, pid: u32) {
+        self.0.test_inject_reaped_child_pid(pid);
+    }
+
+    pub(crate) fn managed_process_anchor(&self) -> Option<crate::platform::ControlProcessAnchor> {
+        self.0.managed_process_anchor()
     }
 
     pub fn child_pid(&self) -> Option<u32> {

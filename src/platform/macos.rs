@@ -1424,3 +1424,10 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
         assert!(argv[2].contains("/tmp/herdr scrollback.txt"));
     }
 }
+
+mod control;
+pub(crate) use control::{
+    capture_control_process_anchor, control_peer_identity, validate_control_peer,
+};
+#[cfg(test)]
+mod control_tests;

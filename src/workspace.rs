@@ -685,6 +685,7 @@ impl Workspace {
             extra_env,
             focus_new_pane,
             None,
+            None,
         )
     }
 
@@ -718,6 +719,7 @@ impl Workspace {
             extra_env,
             focus_new_pane,
             None,
+            None,
         )
     }
 
@@ -750,6 +752,7 @@ impl Workspace {
             extra_env,
             focus_new_pane,
             Some(argv),
+            None,
         )
     }
 
@@ -783,6 +786,42 @@ impl Workspace {
             extra_env,
             focus_new_pane,
             Some(argv),
+            None,
+        )
+    }
+
+    // Managed jobs reuse the existing direct argv factory with private lifecycle identity.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn split_pane_managed_argv_command(
+        &mut self,
+        pane_id: PaneId,
+        direction: Direction,
+        rows: u16,
+        cols: u16,
+        cwd: PathBuf,
+        argv: &[String],
+        extra_env: Vec<(String, String)>,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        job_id: &str,
+        launch_id: &str,
+    ) -> Option<std::io::Result<(usize, crate::workspace::tab::NewPane)>> {
+        self.split_pane_with_runtime(
+            pane_id,
+            direction,
+            None,
+            rows,
+            cols,
+            Some(cwd),
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            extra_env,
+            false,
+            Some(argv),
+            Some((job_id, launch_id)),
         )
     }
 
@@ -802,11 +841,16 @@ impl Workspace {
         extra_env: Vec<(String, String)>,
         focus_new_pane: bool,
         argv: Option<&[String]>,
+        managed_job: Option<(&str, &str)>,
     ) -> Option<std::io::Result<(usize, crate::workspace::tab::NewPane)>> {
         let tab_idx = self.find_tab_index_for_pane(pane_id)?;
         let pane_number = self.next_public_pane_number;
         let tab_number = self.tabs[tab_idx].number;
         let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let launch_env = match managed_job {
+            Some((job, launch)) => launch_env.with_managed_job(job.to_string(), launch.to_string()),
+            None => launch_env,
+        };
         let tab = &mut self.tabs[tab_idx];
         let new_pane = match if let Some(argv) = argv {
             tab.split_pane_argv(

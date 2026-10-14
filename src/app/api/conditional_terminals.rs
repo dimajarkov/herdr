@@ -6,7 +6,10 @@ use crate::api::schema::{
 use crate::app::App;
 
 impl App {
-    fn current_terminal_condition(&self, pane: &str) -> Result<TerminalCondition, &'static str> {
+    pub(super) fn current_terminal_condition(
+        &self,
+        pane: &str,
+    ) -> Result<TerminalCondition, &'static str> {
         // Never follow a stale pane alias to its new location.
         let (ws_idx, pane_id) = self
             .parse_current_public_pane_id(pane)
@@ -39,7 +42,7 @@ impl App {
         })
     }
 
-    fn validate_terminal_condition(
+    pub(super) fn validate_terminal_condition(
         &self,
         condition: &TerminalCondition,
     ) -> Result<(), &'static str> {

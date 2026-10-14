@@ -9,6 +9,7 @@ mod agent_resume;
 mod agent_suspend_tests;
 pub(crate) mod agent_view;
 mod agents;
+mod control;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 #[cfg(test)]
@@ -105,6 +106,7 @@ impl AppPolicy {
 pub struct App {
     pub state: AppState,
     pub(crate) pixel_mouse_available: bool,
+    pub(crate) managed_jobs: control::ManagedJobs,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
@@ -624,6 +626,7 @@ impl App {
             state,
             pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,
+            managed_jobs: control::ManagedJobs::default(),
             event_tx,
             event_rx,
             last_git_remote_status_refresh: Instant::now() - GIT_REMOTE_STATUS_REFRESH_INTERVAL,

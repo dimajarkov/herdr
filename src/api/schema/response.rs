@@ -42,6 +42,24 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    ManagedTerminal {
+        #[serde(flatten)]
+        job: Box<super::ManagedTerminalInfo>,
+    },
+    ManagedTerminalCapabilities {
+        job_ownership: bool,
+        cooperative_control: bool,
+        version: u32,
+        max_frame_bytes: u32,
+        required_sdk_features: Vec<String>,
+    },
+    AgentControlRegistered {
+        condition: super::AgentCondition,
+    },
+    AgentControlOperation {
+        #[serde(flatten)]
+        operation: super::ControlOperationInfo,
+    },
     TerminalCondition {
         condition: super::terminals::TerminalCondition,
         scope: String,

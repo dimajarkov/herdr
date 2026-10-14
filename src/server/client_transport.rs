@@ -96,11 +96,30 @@ fn write_endpoint_rejection(stream: &mut LocalStream, code: &str, message: impl 
 
 fn decode_endpoint_request(request: &str) -> serde_json::Result<DecodedEndpointRequest> {
     let head = serde_json::from_str::<EndpointRequestHead>(request)?;
+    let managed = crate::api::schema::is_managed_control_method_name(&head.method);
+    if managed && head.id.len() > 128 {
+        return Ok(DecodedEndpointRequest::Error {
+            request_id: String::new(),
+            code: "invalid_control_id",
+            message: "managed/control endpoint correlation id exceeds 128 bytes".into(),
+        });
+    }
+    if managed && request.len() >= crate::api::schema::MANAGED_CONTROL_MAX_FRAME_BYTES {
+        return Ok(DecodedEndpointRequest::Error {
+            request_id: head.id,
+            code: "control_frame_too_large",
+            message: "managed/control endpoint request exceeds 16KiB".into(),
+        });
+    }
     if !crate::server::client_commands::supports_client_shell_method_name(&head.method) {
         return Ok(DecodedEndpointRequest::Error {
             request_id: head.id,
             code: "unsupported_method",
-            message: format!("method {:?} is not available on this machine", head.method),
+            message: if managed {
+                "managed/control method is not available on this machine".into()
+            } else {
+                format!("method {:?} is not available on this machine", head.method)
+            },
         });
     }
     Ok(
@@ -109,7 +128,15 @@ fn decode_endpoint_request(request: &str) -> serde_json::Result<DecodedEndpointR
             Err(error) => DecodedEndpointRequest::Error {
                 request_id: head.id,
                 code: "invalid_request",
-                message: format!("invalid endpoint request: {error}"),
+                message: if managed {
+                    format!(
+                        "invalid endpoint request: at line {} column {}",
+                        error.line(),
+                        error.column()
+                    )
+                } else {
+                    format!("invalid endpoint request: {error}")
+                },
             },
         },
     )
@@ -1874,6 +1901,61 @@ mod tests {
                 ..
             } if request_id == "req-1"
         ));
+    }
+
+    #[test]
+    fn managed_endpoint_raw_frame_bound_preserves_legacy_large_json_requests() {
+        let padding = " ".repeat(16384);
+        let managed=format!("{{\"id\":\"bounded\",\"method\":\"terminal.job.capabilities\",\"params\":{{}}}}{padding}");
+        assert!(
+            matches!(decode_endpoint_request(&managed).unwrap(),DecodedEndpointRequest::Error {code:"control_frame_too_large",request_id,..} if request_id=="bounded")
+        );
+        let legacy =
+            format!("{{\"id\":\"legacy\",\"method\":\"workspace.focus\",\"params\":{{\"workspace_id\":\"w1\"}}}}{padding}");
+        assert!(matches!(
+            decode_endpoint_request(&legacy).unwrap(),
+            DecodedEndpointRequest::Dispatch(_)
+        ));
+    }
+
+    #[test]
+    fn managed_endpoint_external_ids_are_bounded_before_internal_rewriting() {
+        let valid=serde_json::json!({"id":"x".repeat(128),"method":"terminal.job.capabilities","params":{}}).to_string();
+        assert!(matches!(
+            decode_endpoint_request(&valid).unwrap(),
+            DecodedEndpointRequest::Dispatch(_)
+        ));
+        let invalid=serde_json::json!({"id":"x".repeat(129),"method":"terminal.job.capabilities","params":{}}).to_string();
+        assert!(
+            matches!(decode_endpoint_request(&invalid).unwrap(),DecodedEndpointRequest::Error {code:"invalid_control_id",request_id,..} if request_id.is_empty())
+        );
+    }
+
+    #[test]
+    fn malformed_managed_endpoint_diagnostics_do_not_echo_enrollment_data() {
+        let secret = "synthetic-enrollment-secret";
+        let invalid=serde_json::json!({"id":"private","method":"terminal.job.launch","params":{secret:true}}).to_string();
+        assert!(invalid.contains(secret));
+        match decode_endpoint_request(&invalid).unwrap() {
+            DecodedEndpointRequest::Error {
+                code,
+                message,
+                request_id,
+            } => {
+                assert_eq!(code, "invalid_request");
+                assert_eq!(request_id, "private");
+                assert!(message.contains("line"));
+                assert!(!message.contains(secret));
+            }
+            DecodedEndpointRequest::Dispatch(_) => {
+                panic!("malformed new endpoint request dispatched")
+            }
+        }
+        let unsupported=serde_json::json!({"id":"private","method":format!("agent.control.{secret}"),"params":{}}).to_string();
+        match decode_endpoint_request(&unsupported).unwrap() {
+            DecodedEndpointRequest::Error { message, .. } => assert!(!message.contains(secret)),
+            DecodedEndpointRequest::Dispatch(_) => panic!("unknown control endpoint dispatched"),
+        }
     }
 
     #[test]

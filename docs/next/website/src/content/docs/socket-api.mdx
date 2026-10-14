@@ -993,3 +993,42 @@ herdr terminal close-if --condition condition.json
 Runtime launch IDs use 256 bits of operating-system entropy, without a clock, PID or process-local counter fallback.
 They correlate a runtime and are not authentication secrets or permission grants.
 If entropy allocation fails, guarded operations return `terminal_identity_unavailable`; unguarded terminals and imported processes remain usable.
+
+## Managed jobs and cooperative control
+
+`terminal.job.capabilities` advertises version 1 managed ownership and cooperative control separately from the frozen endpoint protocol. Initial support is macOS only. An unsupported server/platform rejects before managed launch; clients must not retry legacy pane input or launch methods.
+
+`terminal.job.launch` takes `{parent, argv, cwd, env, direction, label?}`. The parent is an exact `TerminalCondition`; `argv` begins with an absolute executable, and `cwd` is an existing absolute directory. A fresh unfocused direct-command terminal preserves the provided script/environment and never respawns a reusable shell. A `JobCondition` is `{terminal: TerminalCondition, job_id}`. Ownership includes all processes and replacements inside that resource until explicit release. Moving, importing, restarting or replacing the resource invalidates authority. Human input does not release ownership.
+
+`terminal.job.get`, `terminal.job.close` and `terminal.job.release` take `{condition: JobCondition}`; `terminal.job.rename` also accepts `label`. Close uses existing protection checks and never forces or follows aliases. Release synchronously revokes enrollment/control and retains the pane; a late wrapper exit cannot remove it. Natural exit retains an exit receipt before protected cleanup, and cleanup refusals appear in `diagnostic`. Receipts are ephemeral, bounded and do not survive server restart.
+
+The flat `managed_terminal` result contains `condition`, `phase`, `agent`, `exit`, `diagnostic`, `native_scope_id`, `native_request_ids` and `busy`. `agent: null` means no route. A newly enrolled route stays unavailable for input until a valid native observation arrives.
+
+A one-use capability is injected only into the child's `HERDR_CONTROL_CAPABILITY` environment, with `HERDR_CONTROL_VERSION=1` and `HERDR_CONTROL_SOCKET`. It is excluded from public receipts and debug output. On that exact persistent local JSON connection, `agent.control.register` takes `{capability, version:1, epoch, session, sdk_features}`. The server verifies the kernel socket peer UID/PID/birth and live ancestry against an immutable launch-time terminal/session anchor. Client-supplied process identities, remote endpoint registration, reconnect and successor reenrollment are unsupported. Conditions are identifiers, not authentication secrets.
+
+Required public native SDK features are `input_request_lifecycle_v1`, `message_admission_v1` and `external_request_correlation_v1`. The Pi adapter must check actual `enqueueMessage`, `getUserRequest` and `getUserRequestPreparation` availability before registration. Its declared native dependency includes the admission/lifecycle patches; an unmodified upstream SDK is not sufficient. Prompt uses correlated custom-message admission, which omits ordinary slash/template/input transforms.
+
+`AgentCondition` is `{job, connection, epoch, session}`. Prompt takes `{condition, request_id, text, deadline_ms}`; abort takes `{condition, request_id, native_request_id, deadline_ms}`. The outer JSON ID equals `request_id`, deadlines are 1..30000ms, and there is no PTY input fallback. Prompt requires idle observation with no uncertain admission. Abort targets the exact observed current native scope, including initial/human turns; the child rechecks the scope immediately before its public abort call. A changed scope rejects without aborting a successor.
+
+Connection-only `agent.control.observe` reports `{condition, sequence, native_scope_id?, native_request_ids, busy}` with increasing sequence numbers. Busy preparation may have no abortable scope. Connection-only `agent.control.ack` reports `{condition, request_id, phase, native_request_id?, aborted?, error?}`. Phases are received, accepted, settled or rejected; accepted prompt identity is the exact correlated native member UUID, while abort identity is the exact scope UUID. Text equality and generic settled events cannot acknowledge an operation.
+
+`agent.control.status` takes `{condition, request_id}`. A queued response proves neither native admission nor completion. Deadline/disconnect/release uncertainty becomes `outcome_unknown`, never an automatic retry. Expired frames are dropped before writing where possible, but already-written/buffered/native-queued work may still execute on the same original route. Exact late acknowledgments can resolve a deadline outcome; uncertain prompt admission remains fenced until exact resolution. Release cannot undo work already admitted.
+
+Control frames are limited to 16KiB with a five-second write bound. Malformed, replayed or mismatched stream frames invalidate only the affected route. Operation and job ledgers are bounded; capacity exhaustion requires an explicit release/relaunch or server lifecycle decision, never unsafe eviction and retargeting.
+
+```sh
+herdr terminal job capabilities
+herdr terminal job get --condition job.json
+herdr terminal job release --condition job.json
+herdr terminal job close --condition job.json
+```
+
+The condition file accepts a bare `JobCondition` or the full managed launch/get response. Older servers missing these distinct methods fail closed. Existing terminal-runtime guards retain their weaker scope and are insufficient for agent process replacement protection.
+
+Managed resources, including released retained panes, cannot be transferred by live handoff in version 1 (`managed_handoff_unsupported`); ordinary endpoints remain available. Close the resource before handoff. Receipts expire 30 minutes after the original runtime disappears, never while that runtime remains present. A full ledger does not evict a live resource. Managed launch rejects a zoomed parent before allocation and does not automatically unzoom or steal focus.
+
+The generic initial JSON ingress retains its legacy 1MiB read/decode limit for method classification. Every new managed/control request is refused above 16KiB before dispatch; enrolled stream frames have the same 16KiB bound. Initial malformed-request errors preserve their error code/shape with sanitized line/column diagnostics and bounded correlation IDs, excluding raw input or parser value prose.
+
+An initial unavailable launch identity or an unconsumed 30-second enrollment deadline becomes `phase: "enrollment_failed"` with an actionable diagnostic. Resource ownership remains valid for protected close/release/rename. This differs from a later enrolled-stream disconnect, which preserves the owned editor/resource and reports the lost route.
+
+Managed teardown closes only the exact owned PTY actor and handles, letting the kernel hang up that terminal. It never enumerates or signals recyclable numeric PIDs. This immutable runtime policy survives release and movement; it does not promise forced termination of detached or hangup-ignoring descendants. Ordinary terminal teardown is unchanged.

@@ -23,10 +23,27 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
     request.method.operation().changes_ui
 }
 
+/// Connection-local output with a monotonic operation deadline; never serialized.
+pub(crate) struct ControlOutbound {
+    pub(crate) frame: String,
+    pub(crate) deadline: std::time::Instant,
+}
+
+/// Trusted context of one accepted public control socket, never serialized.
+#[derive(Clone)]
+pub(crate) struct ControlConnection {
+    pub(crate) peer: crate::platform::ControlPeerIdentity,
+    pub(crate) connection: String,
+    pub(crate) outbound: std::sync::mpsc::SyncSender<ControlOutbound>,
+    pub(crate) alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) diagnostic: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
 pub struct ApiRequestMessage {
     pub request: Request,
     pub respond_to: std::sync::mpsc::Sender<String>,
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    pub(crate) control: Option<ControlConnection>,
 }
 
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;

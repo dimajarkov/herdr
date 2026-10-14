@@ -429,7 +429,9 @@ fn run_terminal_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
-        "condition" | "rename-if" | "close-if" | "input-if" => conditional_terminal::run(args),
+        "job" | "condition" | "rename-if" | "close-if" | "input-if" => {
+            conditional_terminal::run(args)
+        }
         "attach" => terminal_attach(&args[1..]),
         "session" => terminal_session(&args[1..]),
         "title" => terminal_title(&args[1..]),
@@ -988,6 +990,8 @@ fn print_config_help() {
 
 fn print_terminal_help() {
     eprintln!("herdr terminal commands:");
+    eprintln!("  herdr terminal job capabilities");
+    eprintln!("  herdr terminal job <get|release|close|rename> --condition PATH [--label LABEL]");
     eprintln!("  herdr terminal condition <pane_id>");
     eprintln!("  herdr terminal rename-if --condition PATH [--label LABEL]");
     eprintln!("  herdr terminal close-if --condition PATH");

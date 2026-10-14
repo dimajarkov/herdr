@@ -1,0 +1,14 @@
+{
+  "agent.control.abort": "ea598b96b0006a05795de75a105e07c693df91fbdaea5cf9c1893a7edf6fa41e",
+  "agent.control.ack": "4604ed0f519d58c090e338d7d376135a63e6cb27ed8d8829ea96fd26e2309760",
+  "agent.control.observe": "6149b009c6c63c01e943ff7a7a6225f47e7391e9576a7331aebc793b19aa2e20",
+  "agent.control.prompt": "8940e27edded2f7bc4c7c496d194981b3add86cdc6ec055c419df94ec3b884ab",
+  "agent.control.register": "0eb6f814308c3aeac1f98e52119e8bff713cc88f1165205280659ba4ce9467fd",
+  "agent.control.status": "635d38aec34178de17f139c1048cda42c4a8f4ec95077989bd8b252b89c061eb",
+  "terminal.job.capabilities": "94d977504d48c475de338fe45d0bc1f9c86f374a1708a8ed174e28e554664d88",
+  "terminal.job.close": "5fbf2ff3c78fc06cc22444cddd50086b65acc9cede648c26e171470500570613",
+  "terminal.job.get": "fd8991f0defde1eb49ff6653e1ae349f990672075d66b3f2ee98da508c608bf1",
+  "terminal.job.launch": "c5fcf11128eeb76a23f722b0f823a53f9a530fa0d5b0d69335045d6c077ab589",
+  "terminal.job.release": "e1fef5d595ff5f7b483cec5037d223c864532d9c3fae478ee6eff4e31d96b90b",
+  "terminal.job.rename": "5763e08623e3636d68f2dabe658f9c1fca9f07f017c544f604a6ce7ab9cf22a3"
+}

@@ -6,9 +6,36 @@ use clap::{Arg, Command};
 
 pub(super) fn commands() -> Vec<Command> {
     let condition = || {
-        Arg::new("condition").long("condition").value_name("PATH").required(true).help("JSON condition file from terminal condition; never falls back to an unguarded operation")
+        Arg::new("condition").long("condition").value_name("PATH").required(true).help("JSON file containing the matching runtime or job condition; never falls back to an unguarded operation")
     };
     vec![
+        Command::new("job")
+            .about("Inspect or release explicit whole-job resource ownership")
+            .subcommand(
+                Command::new("capabilities")
+                    .about("Read managed job and cooperative control support"),
+            )
+            .subcommand(
+                Command::new("get")
+                    .about("Read the original managed job receipt and control status")
+                    .arg(condition()),
+            )
+            .subcommand(
+                Command::new("release")
+                    .about("Revoke ownership and control while retaining the pane")
+                    .arg(condition()),
+            )
+            .subcommand(
+                Command::new("close")
+                    .about("Close only the still-owned exact job, preserving protections")
+                    .arg(condition()),
+            )
+            .subcommand(
+                Command::new("rename")
+                    .about("Rename only the still-owned exact managed resource")
+                    .arg(condition())
+                    .arg(Arg::new("label").long("label").value_name("LABEL")),
+            ),
         Command::new("condition")
             .about("Read exact live terminal runtime identity; excludes agent-process identity")
             .arg(Arg::new("pane").required(true).value_name("PANE_ID")),
@@ -44,7 +71,37 @@ pub(super) fn run(args: &[String]) -> std::io::Result<i32> {
     let Some((name, matches)) = matches.subcommand() else {
         return Ok(2);
     };
-    let method = if name == "condition" {
+    let method = if name == "job" {
+        let Some((action, matches)) = matches.subcommand() else {
+            return Ok(2);
+        };
+        if action == "capabilities" {
+            Method::TerminalJobCapabilities(crate::api::schema::EmptyParams {})
+        } else {
+            let Some(path) = matches.get_one::<String>("condition") else {
+                return Ok(2);
+            };
+            let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            let value = value.pointer("/result/condition").unwrap_or(&value).clone();
+            let condition: crate::api::schema::JobCondition = serde_json::from_value(value)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            match action {
+                "get" => Method::TerminalJobGet(crate::api::schema::ManagedJobParams { condition }),
+                "release" => {
+                    Method::TerminalJobRelease(crate::api::schema::ManagedJobParams { condition })
+                }
+                "close" => {
+                    Method::TerminalJobClose(crate::api::schema::ManagedJobParams { condition })
+                }
+                "rename" => Method::TerminalJobRename(crate::api::schema::ManagedJobRenameParams {
+                    condition,
+                    label: matches.get_one::<String>("label").cloned(),
+                }),
+                _ => return Ok(2),
+            }
+        }
+    } else if name == "condition" {
         let Some(pane) = matches.get_one::<String>("pane") else {
             return Ok(2);
         };

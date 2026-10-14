@@ -135,10 +135,12 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct PaneLaunchEnv {
     extra: Vec<(String, String)>,
     identity: PaneLaunchIdentity,
+    managed_job_id: Option<String>,
+    managed_launch_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -153,11 +155,31 @@ enum PaneLaunchIdentity {
     OmitPane,
 }
 
+impl std::fmt::Debug for PaneLaunchEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PaneLaunchEnv")
+            .field("extra", &"[redacted]")
+            .field("identity", &self.identity)
+            .field("managed_job_id", &self.managed_job_id)
+            .finish()
+    }
+}
 impl PaneLaunchEnv {
+    pub(crate) fn with_managed_job(mut self, job_id: String, launch_id: String) -> Self {
+        self.managed_job_id = Some(job_id);
+        self.managed_launch_id = Some(launch_id);
+        self
+    }
+    pub(crate) fn managed_launch_id(&self) -> Option<&str> {
+        self.managed_launch_id.as_deref()
+    }
+
     pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
         Self {
             extra,
             identity: PaneLaunchIdentity::Inherit,
+            managed_job_id: None,
+            managed_launch_id: None,
         }
     }
 
@@ -1494,6 +1516,12 @@ async fn run_terminal_compression_task(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaneTeardownPolicy {
+    SessionProcesses,
+    OwnedPtyOnly,
+}
+
 /// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
 /// Dropping this aborts async tasks and closes the PTY. An already-running bounded
 /// compression step may finish before releasing its terminal reference.
@@ -1502,6 +1530,10 @@ pub struct PaneRuntime {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
     current_size: Cell<(u16, u16, u32, u32)>,
+    managed_process_anchor: Option<crate::platform::ControlProcessAnchor>,
+    teardown_policy: PaneTeardownPolicy,
+    #[cfg(test)]
+    pid_shutdown_probe: Mutex<Option<Arc<std::sync::atomic::AtomicUsize>>>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     persistence_cwd: Mutex<Option<std::path::PathBuf>>,
@@ -1709,11 +1741,7 @@ impl Drop for PaneRuntime {
         self.compression.abort();
         self.io.shutdown();
         if !self.preserve_processes_on_drop {
-            shutdown_pane_processes(
-                self.pane_id,
-                self.child_pid.load(Ordering::Acquire),
-                self.child_wait_completed.as_deref(),
-            );
+            self.shutdown_session_processes_if_allowed();
         }
     }
 }
@@ -2231,17 +2259,37 @@ fn publish_reported_cwd(
 }
 
 impl PaneRuntime {
+    fn shutdown_session_processes_if_allowed(&self) {
+        // Managed authority names an owned PTY resource, never a recyclable PID.
+        // Closing its actor/handles lets the kernel hang up that exact terminal.
+        if self.teardown_policy == PaneTeardownPolicy::OwnedPtyOnly {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(probe) = self.pid_shutdown_probe.lock().unwrap().as_ref() {
+            probe.fetch_add(1, Ordering::Relaxed);
+        }
+        shutdown_pane_processes(
+            self.pane_id,
+            self.child_pid.load(Ordering::Acquire),
+            self.child_wait_completed.as_deref(),
+        );
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_pid_shutdown_probe(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        let probe = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        *self.pid_shutdown_probe.lock().unwrap() = Some(probe.clone());
+        probe
+    }
+
     pub fn shutdown(mut self) {
         if let Some(handle) = self.detect_handle.take() {
             handle.abort();
         }
         self.compression.abort();
         self.io.shutdown();
-        shutdown_pane_processes(
-            self.pane_id,
-            self.child_pid.load(Ordering::Acquire),
-            self.child_wait_completed.as_deref(),
-        );
+        self.shutdown_session_processes_if_allowed();
         self.preserve_processes_on_drop = true;
     }
 
@@ -2410,6 +2458,7 @@ impl PaneRuntime {
                 windows_powershell_prompt_cwd_reporting,
             },
             AgentDetection::Enabled,
+            launch_env.managed_job_id.clone(),
         )
     }
 
@@ -2448,6 +2497,7 @@ impl PaneRuntime {
             "failed to spawn command pane",
             SpawnInitialState::default(),
             agent_detection,
+            launch_env.managed_job_id.clone(),
         )
     }
 
@@ -2495,6 +2545,7 @@ impl PaneRuntime {
             "failed to spawn argv command pane",
             SpawnInitialState::default(),
             agent_detection,
+            launch_env.managed_job_id.clone(),
         )
     }
 
@@ -2663,6 +2714,10 @@ impl PaneRuntime {
             terminal,
             io,
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
+            managed_process_anchor: None,
+            teardown_policy: PaneTeardownPolicy::SessionProcesses,
+            #[cfg(test)]
+            pid_shutdown_probe: Mutex::new(None),
             child_pid,
             reported_cwd,
             persistence_cwd: Mutex::new(None),
@@ -2698,6 +2753,7 @@ impl PaneRuntime {
         spawn_error_message: &'static str,
         initial_state: SpawnInitialState<'_>,
         agent_detection: AgentDetection,
+        managed_job_id: Option<String>,
     ) -> std::io::Result<Self> {
         crate::logging::pane_spawn_started(pane_id.raw(), rows, cols, scrollback_limit_bytes);
 
@@ -2726,6 +2782,17 @@ impl PaneRuntime {
         let spawned = crate::pty::backend::spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
+        // Capture before starting the child watcher: an unreaped Child prevents
+        // the original PID from being recycled while its launch anchor is read.
+        let teardown_policy = if managed_job_id.is_some() {
+            PaneTeardownPolicy::OwnedPtyOnly
+        } else {
+            PaneTeardownPolicy::SessionProcesses
+        };
+        let managed_process_anchor = managed_job_id
+            .as_ref()
+            .and_then(|_| spawned.child.process_id())
+            .and_then(|pid| crate::platform::capture_control_process_anchor(pid).ok());
         // --- Child watcher task ---
         let child_pid = Arc::new(AtomicU32::new(0));
         let reported_cwd = Arc::new(Mutex::new(None));
@@ -2745,8 +2812,10 @@ impl PaneRuntime {
                 crate::logging::pane_spawned(pane_id.raw(), pid);
             }
             tokio::task::spawn_blocking(move || {
+                let mut code = None;
                 let exit_reason = match child.wait() {
                     Ok(status) => {
+                        code = Some(status.exit_code());
                         let exit_reason = crate::platform::classify_child_exit(&status);
                         let status_text = format!("{status:?}");
                         crate::logging::pane_exited(pane_id.raw(), &status_text);
@@ -2759,10 +2828,19 @@ impl PaneRuntime {
                 };
                 child_wait_completed.store(true, Ordering::Release);
                 // Use blocking send — PaneDied is critical, must not be dropped
-                if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason,
-                })) {
+                let event = match managed_job_id {
+                    Some(job_id) => AppEvent::ManagedJobExited {
+                        job_id,
+                        pane_id,
+                        code,
+                        exit_reason,
+                    },
+                    None => AppEvent::PaneDied {
+                        pane_id,
+                        exit_reason,
+                    },
+                };
+                if let Err(e) = rt.block_on(events.send(event)) {
                     error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
                 }
             });
@@ -3276,6 +3354,10 @@ impl PaneRuntime {
             terminal,
             io,
             current_size: Cell::new((rows, cols, 0, 0)),
+            managed_process_anchor,
+            teardown_policy,
+            #[cfg(test)]
+            pid_shutdown_probe: Mutex::new(None),
             child_pid,
             reported_cwd,
             persistence_cwd: Mutex::new(None),
@@ -3839,6 +3921,18 @@ impl PaneRuntime {
             .or_else(|| self.reported_cwd.lock().ok().and_then(|cwd| cwd.clone()))
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_inject_reaped_child_pid(&self, pid: u32) {
+        self.child_pid.store(pid, Ordering::Release);
+        if let Some(completed) = &self.child_wait_completed {
+            completed.store(true, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn managed_process_anchor(&self) -> Option<crate::platform::ControlProcessAnchor> {
+        self.managed_process_anchor
+    }
+
     pub fn child_pid(&self) -> Option<u32> {
         let pid = self.child_pid.load(Ordering::Acquire);
         (pid > 0).then_some(pid)
@@ -4069,6 +4163,10 @@ impl PaneRuntime {
                     resize_tx,
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
+                managed_process_anchor: None,
+                teardown_policy: PaneTeardownPolicy::SessionProcesses,
+                #[cfg(test)]
+                pid_shutdown_probe: Mutex::new(None),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
                 persistence_cwd: Mutex::new(None),
@@ -5424,6 +5522,10 @@ mod tests {
                 resize_tx,
             },
             current_size: Cell::new((80, 24, 0, 0)),
+            managed_process_anchor: None,
+            teardown_policy: PaneTeardownPolicy::SessionProcesses,
+            #[cfg(test)]
+            pid_shutdown_probe: Mutex::new(None),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
@@ -5464,6 +5566,10 @@ mod tests {
                 resize_tx,
             },
             current_size: Cell::new((80, 24, 0, 0)),
+            managed_process_anchor: None,
+            teardown_policy: PaneTeardownPolicy::SessionProcesses,
+            #[cfg(test)]
+            pid_shutdown_probe: Mutex::new(None),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,

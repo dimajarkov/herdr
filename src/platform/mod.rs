@@ -993,3 +993,54 @@ pub(crate) fn shared_ssh_control_path(
         "interactive SSH recovery requires Unix OpenSSH multiplexing",
     ))
 }
+
+/// This initial cooperative contract is qualified on native Darwin only.
+pub(crate) fn cooperative_control_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Identity captured from the accepted local socket and current kernel process state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ControlPeerIdentity {
+    pub pid: u32,
+    pub uid: u32,
+    pub birth: u64,
+}
+
+/// Immutable launch-time process/terminal identity. Never recapture to adopt a successor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ControlProcessAnchor {
+    pub pid: u32,
+    pub birth: u64,
+    pub tty: u32,
+    pub session: i32,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn control_peer_identity(
+    _stream: &interprocess::local_socket::Stream,
+) -> std::io::Result<ControlPeerIdentity> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "cooperative peer proof requires Darwin",
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn capture_control_process_anchor(_pid: u32) -> std::io::Result<ControlProcessAnchor> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "cooperative peer proof requires Darwin",
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn validate_control_peer(
+    _peer: &ControlPeerIdentity,
+    _anchor: &ControlProcessAnchor,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "cooperative peer proof requires Darwin",
+    ))
+}
