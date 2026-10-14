@@ -4357,6 +4357,77 @@
           ],
           "type": "object"
         },
+        "TerminalCloseIfParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/TerminalCondition"
+            }
+          },
+          "required": [
+            "condition"
+          ],
+          "type": "object"
+        },
+        "TerminalCondition": {
+          "additionalProperties": false,
+          "description": "Identifies one live terminal runtime and its current layout membership.\nThis condition does not identify an agent process inside a persistent shell.",
+          "properties": {
+            "launch_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "tab_id",
+            "terminal_id",
+            "launch_id"
+          ],
+          "type": "object"
+        },
+        "TerminalInputIfParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/TerminalCondition"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "condition",
+            "text"
+          ],
+          "type": "object"
+        },
+        "TerminalRenameIfParams": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/TerminalCondition"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "condition"
+          ],
+          "type": "object"
+        },
         "ToastHerdrPosition": {
           "enum": [
             "top-left",
@@ -5425,6 +5496,70 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentWaitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.condition",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.input_if",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TerminalInputIfParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.close_if",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TerminalCloseIfParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.rename_if",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TerminalRenameIfParams"
             }
           },
           "required": [
@@ -9169,6 +9304,30 @@
           "oneOf": [
             {
               "properties": {
+                "condition": {
+                  "$ref": "#/schemas/success_response/$defs/TerminalCondition"
+                },
+                "input_supported": {
+                  "type": "boolean"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "terminal_condition",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "condition",
+                "scope",
+                "input_supported"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "capabilities": {
                   "anyOf": [
                     {
@@ -10570,6 +10729,31 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TerminalCondition": {
+          "additionalProperties": false,
+          "description": "Identifies one live terminal runtime and its current layout membership.\nThis condition does not identify an agent process inside a persistent shell.",
+          "properties": {
+            "launch_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "tab_id",
+            "terminal_id",
+            "launch_id"
           ],
           "type": "object"
         },

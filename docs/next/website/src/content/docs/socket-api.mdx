@@ -956,3 +956,36 @@ The numbered binary protocol remains for same-install and internal operations,
 including direct terminal attach and live handoff. Check `ping` or `herdr status`
 before using those operations across different builds. JSON API clients should
 ignore unknown fields and handle unsupported methods as normal errors.
+
+## Conditional terminal runtime operations
+
+`terminal.condition` returns a live terminal-runtime condition for an exact current `pane_id`.
+Its response has `scope: "terminal_runtime"`, `input_supported: false`, and a condition containing `pane_id`, `tab_id`, `terminal_id`, and `launch_id`.
+The launch ID is fresh for each runtime creation, including restarts and imported handoffs, and is not persisted.
+A condition validates both runtime identity and current layout membership.
+Moving the terminal out of that membership invalidates the condition while it is elsewhere.
+
+`terminal.rename_if` takes `{condition, label}` and changes the terminal label only when the condition still matches.
+`terminal.close_if` takes `{condition}` and closes only that matching terminal through the ordinary protected-close checks.
+A protection refusal must be reported and must not be retried with an unguarded or forced close.
+Missing runtimes return `terminal_not_found`; mismatched conditions return `stale_terminal_condition`.
+Neither outcome retries a different pane, follows a moved-pane alias, or changes a replacement runtime.
+
+`terminal.input_if` takes `{condition, text}` and explicitly rejects raw PTY input with `unsupported_transport`, even for a matching condition.
+No bytes or delayed Enter are queued by this method.
+A runtime condition cannot identify an agent process that restarts inside the same shell terminal, and it cannot make a PTY write atomic with a foreground-process change.
+Agent automation requiring original-reader targeting needs a separate process-addressed transport and must not treat these lifecycle operations as sufficient replacement protection.
+
+These operations use distinct advertised JSON method names.
+Check the server's advertised methods before use; a missing method disables that guarded action.
+Never substitute legacy `pane.rename`, `pane.close`, or input methods when a guarded method is unavailable.
+The existing unguarded API and generation-1 endpoint codecs remain unchanged.
+
+This deliberately limited contract follows a PTY and protocol/platform design review.
+It supplies conditional runtime lifecycle operations while leaving original-agent input isolation unsupported.
+
+```sh
+herdr terminal condition w1:p1 > condition.json
+herdr terminal rename-if --condition condition.json --label worker
+herdr terminal close-if --condition condition.json
+```

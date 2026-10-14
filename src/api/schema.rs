@@ -12,6 +12,7 @@ pub mod response;
 pub mod server;
 pub mod session;
 pub mod tabs;
+pub mod terminals;
 pub mod workspaces;
 pub mod worktrees;
 
@@ -26,6 +27,7 @@ pub use response::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
+pub use terminals::*;
 pub use workspaces::*;
 pub use worktrees::*;
 
@@ -90,6 +92,10 @@ operations::define_operations! {
     AgentStart(AgentStartParams) => "agent.start", true, false;
     AgentPrompt(AgentPromptParams) => "agent.prompt", true, false;
     AgentWait(AgentWaitParams) => "agent.wait", false, false;
+    TerminalCondition(PaneTarget) => "terminal.condition", false, true;
+    TerminalInputIf(TerminalInputIfParams) => "terminal.input_if", false, true;
+    TerminalCloseIf(TerminalCloseIfParams) => "terminal.close_if", true, true;
+    TerminalRenameIf(TerminalRenameIfParams) => "terminal.rename_if", true, true;
     PaneSplit(PaneSplitParams) => "pane.split", true, true;
     PaneSwap(PaneSwapParams) => "pane.swap", true, true;
     PaneMove(PaneMoveParams) => "pane.move", true, false;

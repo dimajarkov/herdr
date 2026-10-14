@@ -763,3 +763,31 @@ herdr agent wait w1:p1 --until blocked
 由客户端渲染的 Herdr UI 对本地和 SSH 服务器使用稳定的端点代数。客户端和服务器构建不必一致。连接时，双方会协商核心快照、屏幕、输入和 blob 编解码器，服务器则公布支持的 API 方法和可选能力。已保存的 SSH 机器需要 `surface_interest` 来确保只有选中的机器传输窗格画面，并需要 `health_check` 来发现空闲连接的故障。缺少这些能力的服务器会显示 Attention，直到明确更新。详见[连接机器](/zh-cn/docs/connecting-machines/)。缺少方法时,只禁用该服务器上的对应操作并显示客户端本地通知;操作被拒绝或超时也不会断开连接。只有早于端点第 1 代的服务器需要最后更新一次。
 
 带编号的二进制协议仍用于同一安装内的内部操作,包括直接终端连接和实时交接。跨不同构建使用这些操作前,请检查 `ping` 或 `herdr status`。JSON API 客户端应忽略未知字段,并把不支持的方法当作普通错误处理。
+
+## 条件终端运行时操作
+
+`terminal.condition` 为准确的当前 `pane_id` 返回 `scope: "terminal_runtime"`、`input_supported: false`，以及包含 `pane_id`、`tab_id`、`terminal_id` 和 `launch_id` 的条件。
+每次创建、重启或导入交接运行时都会生成新的启动 ID，且不会持久化。
+条件也检查当前布局归属，因此终端移到其他位置期间该条件不匹配。
+
+`terminal.rename_if` 接受 `{condition, label}`，`terminal.close_if` 接受 `{condition}`。
+它们在执行副作用的同一个服务器操作中验证条件，并保留正常的关闭保护。
+缺少运行时返回 `terminal_not_found`，条件不匹配返回 `stale_terminal_condition`，不会重试其他窗格或跟随已移动的窗格别名。
+不能使用强制关闭或无条件操作绕过保护拒绝。
+
+`terminal.input_if` 接受 `{condition, text}`，但即使条件匹配也会返回 `unsupported_transport`。
+它不会排入 PTY 字节或延迟 Enter。
+该条件无法识别同一 shell 中被替换的代理进程，也无法使前台进程变化与 PTY 写入原子化。
+面向原始代理的输入隔离需要单独的进程寻址传输。
+
+这些操作使用单独公布的新 JSON 方法名称。
+使用前检查服务器公布的方法；缺失方法时禁用对应操作。
+不得降级为传统的 `pane.rename`、`pane.close` 或输入方法。
+现有无条件 API 和第 1 代端点编解码器保持不变。
+这一有限契约经过 PTY 及协议与平台设计审查，仍不支持原始代理输入隔离。
+
+```sh
+herdr terminal condition w1:p1 > condition.json
+herdr terminal rename-if --condition condition.json --label worker
+herdr terminal close-if --condition condition.json
+```

@@ -22,6 +22,7 @@ macro_rules! println {
 pub(crate) mod agent;
 mod api;
 mod completion;
+mod conditional_terminal;
 mod integration;
 mod machine;
 pub(crate) mod notification;
@@ -428,6 +429,7 @@ fn run_terminal_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
+        "condition" | "rename-if" | "close-if" | "input-if" => conditional_terminal::run(args),
         "attach" => terminal_attach(&args[1..]),
         "session" => terminal_session(&args[1..]),
         "title" => terminal_title(&args[1..]),
@@ -986,6 +988,12 @@ fn print_config_help() {
 
 fn print_terminal_help() {
     eprintln!("herdr terminal commands:");
+    eprintln!("  herdr terminal condition <pane_id>");
+    eprintln!("  herdr terminal rename-if --condition PATH [--label LABEL]");
+    eprintln!("  herdr terminal close-if --condition PATH");
+    eprintln!(
+        "  herdr terminal input-if --condition PATH --text TEXT (unsupported raw PTY transport)"
+    );
     eprintln!("  herdr terminal attach <terminal_id> [--takeover]");
     eprintln!("  herdr terminal session control <target> [--takeover] [--cols N] [--rows N]");
     eprintln!("  herdr terminal session observe <target> [--cols N] [--rows N]");

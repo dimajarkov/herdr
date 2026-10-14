@@ -769,3 +769,31 @@ herdr agent wait w1:p1 --until blocked
 クライアント描画の Herdr UI は、ローカルサーバーと SSH サーバーに安定したエンドポイント世代を使います。クライアントとサーバーのビルドが一致する必要はありません。接続時にコアのスナップショット、画面、入力、blob コーデックを合意し、サーバーが対応 API メソッドと任意の能力を通知します。保存済み SSH マシンには、選択中のマシンだけがペイン画面を送信するための `surface_interest` と、通信のない接続の障害を検知する `health_check` が必要です。未対応のサーバーは明示的に更新するまで Attention になります。詳しくは[マシンへの接続](/ja/docs/connecting-machines/)を参照してください。メソッドがない場合は、そのサーバー上の該当アクションだけを無効にしてクライアント側通知を表示します。拒否やタイムアウトも接続を終了せず通知します。エンドポイント世代 1 より前のサーバーだけは最後の 1 回の更新が必要です。
 
 番号付きバイナリプロトコルは、直接ターミナル接続やライブハンドオフなど、同一インストール内の内部操作に残ります。異なるビルド間でそれらを使う前に `ping` または `herdr status` を確認してください。JSON API クライアントは未知のフィールドを無視し、未対応メソッドを通常のエラーとして扱う必要があります。
+
+## 条件付き端末ランタイム操作
+
+`terminal.condition` は現在の正確な `pane_id` に対して、`scope: "terminal_runtime"` と `input_supported: false`、および `pane_id`、`tab_id`、`terminal_id`、`launch_id` を含む条件を返します。
+ランタイムの作成、再起動、ハンドオフのインポートごとに新しい起動 ID が発行され、永続化されません。
+条件は現在のレイアウト所属も検証するため、端末が別の場所に移動している間は一致しません。
+
+`terminal.rename_if` は `{condition, label}`、`terminal.close_if` は `{condition}` を受け取ります。
+条件を同じサーバー操作内で確認し、通常の終了保護を維持します。
+ランタイムがない場合は `terminal_not_found`、条件が一致しない場合は `stale_terminal_condition` を返し、別のペインへの再試行や移動済み別名の追跡は行いません。
+保護による拒否を強制終了や無条件操作で回避しないでください。
+
+`terminal.input_if` は `{condition, text}` を受け取りますが、一致していても `unsupported_transport` で拒否します。
+PTY バイトや遅延 Enter はキューに入りません。
+この条件は同じシェル内で置換されたエージェントプロセスを識別できず、前景プロセス変更と PTY 書き込みを不可分にするものではありません。
+元のエージェントへの入力分離には別のプロセス指定トランスポートが必要です。
+
+これらは個別に広告される新しい JSON メソッドです。
+サーバーが広告するメソッドを確認し、未対応ならその操作を無効にしてください。
+従来の `pane.rename`、`pane.close`、入力メソッドに代替しないでください。
+既存の無条件 API と世代 1 のエンドポイントコーデックは変更されません。
+この限定された契約は PTY とプロトコル・プラットフォームの設計レビューに基づき、元のエージェント入力の分離は未対応です。
+
+```sh
+herdr terminal condition w1:p1 > condition.json
+herdr terminal rename-if --condition condition.json --label worker
+herdr terminal close-if --condition condition.json
+```

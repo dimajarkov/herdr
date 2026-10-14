@@ -180,6 +180,8 @@ mod tests {
             "agent.start",
             "agent.prompt",
             "agent.send_keys",
+            "terminal.rename_if",
+            "terminal.close_if",
             "pane.split",
             "pane.swap",
             "pane.move",

@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod conditional_terminals;
 mod env;
 mod integrations;
 mod layouts;
@@ -1139,6 +1140,18 @@ impl App {
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
             Method::AgentSendKeys(params) => {
                 return self.handle_agent_send_keys(request.id, params);
+            }
+            Method::TerminalCondition(target) => {
+                return self.handle_terminal_condition(request.id, target)
+            }
+            Method::TerminalInputIf(params) => {
+                return self.handle_terminal_input_if(request.id, params)
+            }
+            Method::TerminalCloseIf(params) => {
+                return self.handle_terminal_close_if(request.id, params)
+            }
+            Method::TerminalRenameIf(params) => {
+                return self.handle_terminal_rename_if(request.id, params)
             }
             Method::PaneSplit(params) => return self.handle_pane_split(request.id, params),
             Method::PaneSwap(params) => return self.handle_pane_swap(request.id, params),
