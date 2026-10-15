@@ -769,3 +769,57 @@ herdr agent wait w1:p1 --until blocked
 クライアント描画の Herdr UI は、ローカルサーバーと SSH サーバーに安定したエンドポイント世代を使います。クライアントとサーバーのビルドが一致する必要はありません。接続時にコアのスナップショット、画面、入力、blob コーデックを合意し、サーバーが対応 API メソッドと任意の能力を通知します。保存済み SSH マシンには、選択中のマシンだけがペイン画面を送信するための `surface_interest` と、通信のない接続の障害を検知する `health_check` が必要です。未対応のサーバーは明示的に更新するまで Attention になります。詳しくは[マシンへの接続](/ja/docs/connecting-machines/)を参照してください。メソッドがない場合は、そのサーバー上の該当アクションだけを無効にしてクライアント側通知を表示します。拒否やタイムアウトも接続を終了せず通知します。エンドポイント世代 1 より前のサーバーだけは最後の 1 回の更新が必要です。
 
 番号付きバイナリプロトコルは、直接ターミナル接続やライブハンドオフなど、同一インストール内の内部操作に残ります。異なるビルド間でそれらを使う前に `ping` または `herdr status` を確認してください。JSON API クライアントは未知のフィールドを無視し、未対応メソッドを通常のエラーとして扱う必要があります。
+
+## 条件付き端末ランタイム操作
+
+`terminal.condition` は現在の正確な `pane_id` に対して、`scope: "terminal_runtime"` と `input_supported: false`、および `pane_id`、`tab_id`、`terminal_id`、`launch_id` を含む条件を返します。
+ランタイムの作成、再起動、ハンドオフのインポートごとに新しい起動 ID が発行され、永続化されません。
+条件は現在のレイアウト所属も検証するため、端末が別の場所に移動している間は一致しません。
+
+`terminal.rename_if` は `{condition, label}`、`terminal.close_if` は `{condition}` を受け取ります。
+条件を同じサーバー操作内で確認し、通常の終了保護を維持します。
+ランタイムがない場合は `terminal_not_found`、条件が一致しない場合は `stale_terminal_condition` を返し、別のペインへの再試行や移動済み別名の追跡は行いません。
+保護による拒否を強制終了や無条件操作で回避しないでください。
+
+`terminal.input_if` は `{condition, text}` を受け取りますが、一致していても `unsupported_transport` で拒否します。
+PTY バイトや遅延 Enter はキューに入りません。
+この条件は同じシェル内で置換されたエージェントプロセスを識別できず、前景プロセス変更と PTY 書き込みを不可分にするものではありません。
+元のエージェントへの入力分離には別のプロセス指定トランスポートが必要です。
+
+これらは個別に広告される新しい JSON メソッドです。
+サーバーが広告するメソッドを確認し、未対応ならその操作を無効にしてください。
+従来の `pane.rename`、`pane.close`、入力メソッドに代替しないでください。
+既存の無条件 API と世代 1 のエンドポイントコーデックは変更されません。
+この限定された契約は PTY とプロトコル・プラットフォームの設計レビューに基づき、元のエージェント入力の分離は未対応です。
+
+```sh
+herdr terminal condition w1:p1 > condition.json
+herdr terminal rename-if --condition condition.json --label worker
+herdr terminal close-if --condition condition.json
+```
+
+起動 ID は OS のエントロピー 256 ビットを使用し、時計、PID、プロセス内カウンターへの代替はありません。
+ID はランタイムの対応付けに使用され、認証シークレットや権限の付与ではありません。
+エントロピー取得が失敗すると保護操作は `terminal_identity_unavailable` を返しますが、従来の端末操作やインポートされたプロセスは引き続き使用できます。
+
+## 管理ジョブと協調制御
+
+`terminal.job.capabilities` は管理ジョブと協調制御の version 1 機能を公開します。初期対応は macOS のみです。未対応の場合は起動前に拒否し、従来の PTY 入力へ切り替えません。`terminal.job.launch` の `{parent, argv, cwd, env, direction, label?}` は新しい直接実行端末を作成します。所有権は明示的に解放されるまで、そのジョブ内の全プロセスに及びます。端末の移動・再起動・置換で権限は失効し、人間の入力だけでは解放されません。
+
+`JobCondition` は `{terminal: TerminalCondition, job_id}` です。`terminal.job.get/close/release` は `{condition}` を受け取り、`rename` は `label` も受け取ります。close は既存の保護を維持します。release は制御・登録を失効させて端末を残し、遅れた終了通知でも削除しません。終了結果と保護による拒否は `exit` と `diagnostic` に残ります。情報は一時的かつ容量制限付きで、サーバー再起動をまたぎません。
+
+制御には子環境だけへ注入される一回限りの登録能力と、同じローカル JSON ソケットの PID・UID・開始時刻・元の端末への所属検証が必要です。登録後の `{job, connection, epoch, session}` は不変です。初回観測前、切断後、セッション変更後は送信できません。再接続や PTY フォールバックはありません。
+
+`agent.control.prompt/abort/status/ack/observe` は元のストリームと外部リクエスト ID、ネイティブ UUID を相関させます。abort は現在観測されたスコープだけを対象とし、子が実行直前に再確認します。初期・人間のターンも対象にできます。テキスト一致や一般的な終了イベントで完了を判定しません。busy の準備状態にはスコープがない場合があります。
+
+必要な公開 SDK 機能は `input_request_lifecycle_v1`、`message_admission_v1`、`external_request_correlation_v1` です。Pi の宣言済みネイティブ依存とパッチを確認し、未修正 SDK を代用しません。カスタムメッセージによる prompt は通常の slash/template/input 変換を通りません。フレームは 16KiB、書き込みは 5 秒、期限は 1..30000ms に制限されます。`queued` は受理や完了の証明ではありません。期限・切断時は `outcome_unknown` となり自動再送しません。既に書き込まれた作業は同じ元の経路で実行される可能性があり、release で取り消せるとは限りません。
+
+明示的な解放は `herdr terminal job release --condition job.json`、状態確認は `get`、保護付き終了は `close`、機能確認は `capabilities` です。条件ファイルは `JobCondition` または起動・取得レスポンス全体を受け取ります。旧サーバーには安全でない代替を行いません。既存の terminal-runtime 条件だけではエージェント置換保護には不十分です。
+
+version 1 では解放後の端末も含め管理資源の live handoff は `managed_handoff_unsupported` で拒否します。通常のエンドポイントには影響しません。元のランタイムがなくなってから 30 分で記録が失効し、存続中の資源は削除しません。ズーム中の親には起動前に拒否し、自動解除やフォーカス変更を行いません。
+
+一般 JSON 入力の初回読取り・分類は既存の 1MiB 制限を維持します。新しい managed/control 要求は処理前に 16KiB 超過を拒否し、登録済みストリームにも同じ制限を適用します。不正入力の診断は行・列と制限付き ID に限定し、生の内容を表示しません。
+
+初回の元プロセス証明が利用できない場合や 30 秒の登録期限を超過した場合、`enrollment_failed` と診断を返します。保護付き close/release/rename の所有権は保持します。登録後の切断は別の状態であり、端末を残して経路の喪失を通知します。
+
+管理端末の終了は所有する PTY のアクターとハンドルだけを閉じ、カーネルによる切断を利用します。再利用可能な PID の列挙やシグナル送信を行いません。このポリシーは解放・移動後も維持されます。切り離された子や切断を無視する子の強制終了は保証せず、通常端末の既存処理は変更しません。

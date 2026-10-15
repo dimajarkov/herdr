@@ -76,6 +76,13 @@ pub(crate) struct WorktreeReadData {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
+    /// A managed direct-command wrapper ended; identity prevents stale pane cleanup.
+    ManagedJobExited {
+        job_id: String,
+        pane_id: PaneId,
+        code: Option<u32>,
+        exit_reason: crate::platform::ChildExitReason,
+    },
     /// A pane's child process exited.
     PaneDied {
         pane_id: PaneId,

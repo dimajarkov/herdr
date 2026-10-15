@@ -23,6 +23,7 @@ use crate::ipc::{
 };
 use crate::server::shutdown::{ServerStop, ShutdownReason};
 
+mod control;
 #[cfg(test)]
 mod subscription_socket_tests;
 
@@ -342,6 +343,7 @@ fn handle_connection_with_stop(
         return Ok(());
     };
 
+    let initial_frame_bytes = line.len();
     let line = line.trim();
     if line.is_empty() {
         return Ok(());
@@ -358,7 +360,9 @@ fn handle_connection_with_stop(
             }
             let id = if line.starts_with('{') {
                 serde_json::from_str::<RequestId>(line)
+                    .ok()
                     .map(|request| request.id)
+                    .filter(|id| id.len() <= 128)
                     .unwrap_or_default()
             } else {
                 String::new()
@@ -368,7 +372,13 @@ fn handle_connection_with_stop(
                     id,
                     error: ErrorBody {
                         code: "invalid_request".into(),
-                        message: format!("invalid request: {request_error}"),
+                        // Parser prose may contain an enrollment capability supplied as an
+                        // unknown field or invalid enum. Expose location, never input.
+                        message: format!(
+                            "invalid request: at line {} column {}",
+                            request_error.line(),
+                            request_error.column()
+                        ),
                     },
                 });
             write_json_line_allow_disconnect(&mut stream, &response)?;
@@ -376,10 +386,47 @@ fn handle_connection_with_stop(
         }
     };
 
-    let request_id = request.id.clone();
     let method = api_method_name(&request.method);
+    if crate::api::schema::is_managed_control_method_name(method)
+        && initial_frame_bytes > crate::api::schema::MANAGED_CONTROL_MAX_FRAME_BYTES
+    {
+        let id = if request.id.len() <= 128 {
+            request.id
+        } else {
+            String::new()
+        };
+        return write_text_line_allow_disconnect(
+            &mut stream,
+            &error_response_json(
+                id,
+                "control_frame_too_large",
+                "managed control request exceeds 16KiB".into(),
+            ),
+        );
+    }
+    if crate::api::schema::is_managed_control_method_name(method) && request.id.len() > 128 {
+        return write_text_line_allow_disconnect(
+            &mut stream,
+            &error_response_json(
+                String::new(),
+                "invalid_control_id",
+                "managed request id exceeds 128 bytes".into(),
+            ),
+        );
+    }
+    let request_id = request.id.clone();
     let changes_ui = request_changes_ui(&request);
     crate::logging::api_request_started(&request_id, method, changes_ui);
+
+    if matches!(&request.method, Method::AgentControlRegister(_)) {
+        return control::handle_control_connection(
+            stream,
+            request,
+            initial_frame_bytes,
+            api_tx,
+            running,
+        );
+    }
 
     match request.method {
         #[cfg(unix)]
@@ -964,6 +1011,7 @@ fn dispatch_to_app(
     let request_id = request.id.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
+        control: None,
         request,
         respond_to,
         response_write_complete,

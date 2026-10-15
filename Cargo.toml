@@ -26,6 +26,8 @@ default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
+# OS entropy gives live runtime identities independence from clocks and PID reuse.
+getrandom = "0.4.2"
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

@@ -14,9 +14,42 @@ use crate::layout::PaneId;
 /// The PTY implementation still delegates to the legacy pane runtime while the
 /// migration proceeds, but production code now depends on this terminal-layer
 /// type instead of the pane module's implementation detail.
-pub struct TerminalRuntime(crate::pane::PaneRuntime);
+pub struct TerminalRuntime(crate::pane::PaneRuntime, Option<String>);
 
 impl TerminalRuntime {
+    fn new(runtime: crate::pane::PaneRuntime) -> Self {
+        Self::new_with_entropy(runtime, getrandom::fill)
+    }
+
+    fn new_with_entropy(
+        runtime: crate::pane::PaneRuntime,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
+    ) -> Self {
+        let mut entropy = [0u8; 32];
+        let launch_id = match fill(&mut entropy) {
+            Ok(()) => {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let mut id = String::with_capacity(72);
+                id.push_str("runtime_");
+                for byte in entropy {
+                    id.push(char::from(HEX[usize::from(byte >> 4)]));
+                    id.push(char::from(HEX[usize::from(byte & 15)]));
+                }
+                Some(id)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "OS entropy unavailable; guarded terminal lifecycle disabled for this runtime");
+                None
+            }
+        };
+        Self(runtime, launch_id)
+    }
+
+    /// Live runtime identity. Fresh after spawn, restart, or imported handoff.
+    pub(crate) fn launch_id(&self) -> Option<&str> {
+        self.1.as_deref()
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
     }
@@ -78,7 +111,7 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self)
+        .map(Self::new)
     }
 
     // Wrapper mirrors pane runtime construction arguments.
@@ -111,7 +144,7 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self)
+        .map(Self::new)
     }
 
     // Wrapper mirrors pane runtime construction arguments.
@@ -146,7 +179,7 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self)
+        .map(Self::new)
     }
 
     // Wrapper mirrors pane runtime construction arguments.
@@ -181,7 +214,7 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self)
+        .map(Self::new)
     }
 
     // Wrapper mirrors pane runtime construction arguments, including detection policy.
@@ -216,7 +249,10 @@ impl TerminalRuntime {
             render_notify,
             render_dirty,
         )
-        .map(Self)
+        .map(|runtime| match launch_env.managed_launch_id() {
+            Some(id) => Self(runtime, Some(id.to_string())),
+            None => Self::new(runtime),
+        })
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
@@ -590,6 +626,20 @@ impl TerminalRuntime {
         self.0.foreground_cwd()
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_pid_shutdown_probe(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.0.test_pid_shutdown_probe()
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_inject_reaped_child_pid(&self, pid: u32) {
+        self.0.test_inject_reaped_child_pid(pid);
+    }
+
+    pub(crate) fn managed_process_anchor(&self) -> Option<crate::platform::ControlProcessAnchor> {
+        self.0.managed_process_anchor()
+    }
+
     pub fn child_pid(&self) -> Option<u32> {
         self.0.child_pid()
     }
@@ -631,14 +681,25 @@ impl TerminalRuntime {
         self.0.test_contend_during_dirty_collection(bytes)
     }
 
+    pub(crate) fn test_with_entropy_unavailable(
+        cols: u16,
+        rows: u16,
+    ) -> (Self, mpsc::Receiver<Bytes>) {
+        let (runtime, rx) = crate::pane::PaneRuntime::test_with_channel(cols, rows);
+        (
+            Self::new_with_entropy(runtime, |_| Err(getrandom::Error::UNSUPPORTED)),
+            rx,
+        )
+    }
+
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
         let (runtime, rx) = crate::pane::PaneRuntime::test_with_channel(cols, rows);
-        (Self(runtime), rx)
+        (Self::new(runtime), rx)
     }
 
     #[cfg(unix)]
     pub(crate) fn test_with_actor(actor: crate::pty::actor::PtyIoActorHandle) -> Self {
-        Self(crate::pane::PaneRuntime::test_with_actor(actor))
+        Self::new(crate::pane::PaneRuntime::test_with_actor(actor))
     }
 
     pub(crate) fn test_with_channel_capacity(
@@ -648,11 +709,11 @@ impl TerminalRuntime {
     ) -> (Self, mpsc::Receiver<Bytes>) {
         let (runtime, rx) =
             crate::pane::PaneRuntime::test_with_channel_capacity(cols, rows, capacity);
-        (Self(runtime), rx)
+        (Self::new(runtime), rx)
     }
 
     pub(crate) fn test_with_screen_bytes(cols: u16, rows: u16, bytes: &[u8]) -> Self {
-        Self(crate::pane::PaneRuntime::test_with_screen_bytes(
+        Self::new(crate::pane::PaneRuntime::test_with_screen_bytes(
             cols, rows, bytes,
         ))
     }
@@ -667,7 +728,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         bytes: &[u8],
     ) -> Self {
-        Self(crate::pane::PaneRuntime::test_with_scrollback_bytes(
+        Self::new(crate::pane::PaneRuntime::test_with_scrollback_bytes(
             cols,
             rows,
             scrollback_limit_bytes,
@@ -689,6 +750,6 @@ impl TerminalRuntime {
             bytes,
             channel_capacity,
         );
-        (Self(runtime), rx)
+        (Self::new(runtime), rx)
     }
 }

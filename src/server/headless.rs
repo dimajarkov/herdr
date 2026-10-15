@@ -2929,6 +2929,11 @@ impl HeadlessServer {
 
         let metadata_expired = self.app.expire_due_metadata(Instant::now());
         if let api::schema::Method::ServerLiveHandoff(params) = &msg.request.method {
+            if self.app.has_managed_job_runtime() {
+                let response=serde_json::to_string(&api::schema::ErrorResponse {id:msg.request.id,error:api::schema::ErrorBody {code:"managed_handoff_unsupported".into(),message:"live handoff cannot transfer managed job no-reuse policy; close its resource before handoff".into()}}).unwrap_or_else(|_|"{}".into());
+                let _ = msg.respond_to.send(response);
+                return false;
+            }
             let handoff_result = self.perform_live_handoff(params.clone());
             let handoff_succeeded = handoff_result.is_ok();
             let response = match handoff_result {
@@ -3088,7 +3093,10 @@ impl HeadlessServer {
             })
         } else {
             self.app
-                .handle_api_request_after_internal_events_drained(msg.request)
+                .handle_api_request_after_internal_events_drained_with_control(
+                    msg.request,
+                    msg.control,
+                )
         };
         if let Some(snapshot) = frozen_alt_screen_read {
             if let Ok(mut success) = serde_json::from_str::<api::schema::SuccessResponse>(&response)

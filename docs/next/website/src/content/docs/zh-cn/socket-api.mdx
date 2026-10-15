@@ -763,3 +763,57 @@ herdr agent wait w1:p1 --until blocked
 由客户端渲染的 Herdr UI 对本地和 SSH 服务器使用稳定的端点代数。客户端和服务器构建不必一致。连接时，双方会协商核心快照、屏幕、输入和 blob 编解码器，服务器则公布支持的 API 方法和可选能力。已保存的 SSH 机器需要 `surface_interest` 来确保只有选中的机器传输窗格画面，并需要 `health_check` 来发现空闲连接的故障。缺少这些能力的服务器会显示 Attention，直到明确更新。详见[连接机器](/zh-cn/docs/connecting-machines/)。缺少方法时,只禁用该服务器上的对应操作并显示客户端本地通知;操作被拒绝或超时也不会断开连接。只有早于端点第 1 代的服务器需要最后更新一次。
 
 带编号的二进制协议仍用于同一安装内的内部操作,包括直接终端连接和实时交接。跨不同构建使用这些操作前,请检查 `ping` 或 `herdr status`。JSON API 客户端应忽略未知字段,并把不支持的方法当作普通错误处理。
+
+## 条件终端运行时操作
+
+`terminal.condition` 为准确的当前 `pane_id` 返回 `scope: "terminal_runtime"`、`input_supported: false`，以及包含 `pane_id`、`tab_id`、`terminal_id` 和 `launch_id` 的条件。
+每次创建、重启或导入交接运行时都会生成新的启动 ID，且不会持久化。
+条件也检查当前布局归属，因此终端移到其他位置期间该条件不匹配。
+
+`terminal.rename_if` 接受 `{condition, label}`，`terminal.close_if` 接受 `{condition}`。
+它们在执行副作用的同一个服务器操作中验证条件，并保留正常的关闭保护。
+缺少运行时返回 `terminal_not_found`，条件不匹配返回 `stale_terminal_condition`，不会重试其他窗格或跟随已移动的窗格别名。
+不能使用强制关闭或无条件操作绕过保护拒绝。
+
+`terminal.input_if` 接受 `{condition, text}`，但即使条件匹配也会返回 `unsupported_transport`。
+它不会排入 PTY 字节或延迟 Enter。
+该条件无法识别同一 shell 中被替换的代理进程，也无法使前台进程变化与 PTY 写入原子化。
+面向原始代理的输入隔离需要单独的进程寻址传输。
+
+这些操作使用单独公布的新 JSON 方法名称。
+使用前检查服务器公布的方法；缺失方法时禁用对应操作。
+不得降级为传统的 `pane.rename`、`pane.close` 或输入方法。
+现有无条件 API 和第 1 代端点编解码器保持不变。
+这一有限契约经过 PTY 及协议与平台设计审查，仍不支持原始代理输入隔离。
+
+```sh
+herdr terminal condition w1:p1 > condition.json
+herdr terminal rename-if --condition condition.json --label worker
+herdr terminal close-if --condition condition.json
+```
+
+启动 ID 使用来自操作系统的 256 位熵，不会退回时钟、PID 或进程内计数器。
+ID 用于关联运行时，不是认证秘密，也不授予权限。
+如果熵分配失败，保护操作返回 `terminal_identity_unavailable`，但普通终端操作与导入的进程仍可使用。
+
+## 托管任务与协作控制
+
+`terminal.job.capabilities` 公布 version 1 的任务所有权与协作控制能力。初始仅支持 macOS；不支持时在启动前拒绝，不回退到传统 PTY 输入。`terminal.job.launch` 接受 `{parent, argv, cwd, env, direction, label?}`，创建新的直接执行终端。所有权覆盖该任务资源内的所有进程，直到显式释放。移动、重启或替换终端会使权限失效；人工输入不会自动释放。
+
+`JobCondition` 为 `{terminal: TerminalCondition, job_id}`。`terminal.job.get/close/release` 接受 `{condition}`，`rename` 还接受 `label`。close 保留现有关闭保护。release 撤销注册与控制并保留终端，迟到的退出事件不会删除它。退出记录与保护拒绝保存在 `exit` 和 `diagnostic`；记录有容量限制且不跨服务器重启。
+
+控制使用仅注入子进程环境的一次性注册能力，并验证同一本地 JSON 套接字的内核 PID、UID、进程出生标记及其原始终端归属。注册后的 `{job, connection, epoch, session}` 不可变。首次有效原生观察前、断开后或会话变化后均不能发送。不支持重连、继任进程重新注册或 PTY 回退。
+
+`agent.control.prompt/abort/status/ack/observe` 关联原始连接、外部请求 ID 和原生 UUID。abort 只针对当前观察的原生 scope，子进程在调用前再次检查；初始或人工发起的请求同样适用。不能用文本相等或通用完成事件确认操作。busy 的准备阶段可能没有可中止的 scope。
+
+必需的公开 SDK 能力为 `input_request_lifecycle_v1`、`message_admission_v1` 和 `external_request_correlation_v1`。Pi 必须检查声明的原生依赖和补丁，不能替换为未修改 SDK。自定义消息 prompt 不经过普通 slash/template/input 转换。控制帧限制为 16KiB，写入限制为 5 秒，期限为 1..30000ms。`queued` 不表示原生接受或完成。超时或断开产生 `outcome_unknown`，禁止自动重试；已经写入的工作仍可能在同一原始路由上执行，release 不能撤销已接受的工作。
+
+显式释放使用 `herdr terminal job release --condition job.json`；状态查询用 `get`，保护关闭用 `close`，能力查询用 `capabilities`。条件文件可为 `JobCondition` 或完整启动/查询响应。旧服务器缺少独立方法时安全拒绝。已有 terminal-runtime 条件不足以提供代理进程替换保护。
+
+version 1 的托管资源（包括已释放但保留的终端）不支持 live handoff，返回 `managed_handoff_unsupported`，普通端点不受影响。原始运行时消失 30 分钟后记录过期；仍存在的资源不会被淘汰。父终端缩放时在分配前拒绝启动，不自动取消缩放或切换焦点。
+
+通用 JSON 首帧读取与分类保留既有 1MiB 限制。所有新增 managed/control 请求在分派前拒绝超过 16KiB 的帧，注册后流使用相同限制。不合法请求仅提供行列位置和有长度限制的关联 ID，不回显原始输入。
+
+初始原进程证明不可用或 30 秒注册期限已过时，返回 `enrollment_failed` 和可操作诊断，仍保留受保护的 close/release/rename 所有权。这与注册后连接丢失不同；后者保留终端并报告路由丢失。
+
+托管终端清理只关闭其持有的 PTY actor 与句柄，由内核挂断该终端，不枚举或向可复用的数字 PID 发信号。此不可变策略在释放和移动后保持；不保证强制终止已脱离或忽略挂断的后代，普通终端清理不变。

@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    fn endpoint_method_shape_digests() -> BTreeMap<String, String> {
+    fn method_shape_digests(methods: &[&str]) -> BTreeMap<String, String> {
         let schema = serde_json::to_value(schemars::schema_for!(crate::api::schema::Request))
             .expect("request schema");
         let definitions = schema
@@ -202,7 +202,7 @@ mod tests {
             .expect("request method branches");
         let mut digests = BTreeMap::new();
 
-        for method in supported_client_shell_method_names() {
+        for method in methods {
             let branch = branches
                 .iter()
                 .find(|branch| {
@@ -244,7 +244,7 @@ mod tests {
             "/tests/fixtures/endpoint-method-shapes-v1.json"
         )))
         .expect("endpoint method shape fixture");
-        let mut actual = endpoint_method_shape_digests();
+        let mut actual = method_shape_digests(supported_client_shell_method_names());
         // Freeze additive methods separately without rewriting the published fixture.
         assert_eq!(
             actual.remove("pane.clear").as_deref(),
@@ -255,9 +255,61 @@ mod tests {
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
 
+        let guarded: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-guarded-terminal-method-shapes-v1.json"
+        )))
+        .expect("guarded terminal method shape fixture");
+        for (method, digest) in guarded {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "guarded method changed shape: {method}"
+            );
+        }
+
+        let managed: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-managed-control-method-shapes-v1.json"
+        )))
+        .expect("managed control method shape fixture");
+        for (method, digest) in managed
+            .into_iter()
+            .filter(|(method, _)| method.starts_with("terminal.job."))
+        {
+            assert_eq!(
+                actual.remove(&method).as_deref(),
+                Some(digest.as_str()),
+                "managed method changed shape: {method}"
+            );
+        }
         assert_eq!(
             actual, expected,
             "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"
+        );
+    }
+
+    #[test]
+    fn additive_managed_control_method_shapes_are_frozen_separately() {
+        let methods: Vec<_> = crate::api::schema::Method::OPERATIONS
+            .iter()
+            .filter(|operation| {
+                operation.name.starts_with("terminal.job.")
+                    || operation.name.starts_with("agent.control.")
+            })
+            .map(|operation| operation.name)
+            .collect();
+        let actual = method_shape_digests(&methods);
+        let expected: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-managed-control-method-shapes-v1.json"
+        )))
+        .expect("managed control fixture");
+        assert_eq!(
+            actual,
+            expected,
+            "managed control shapes: {}",
+            serde_json::to_string(&actual).unwrap()
         );
     }
 

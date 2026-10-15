@@ -249,6 +249,7 @@ fn terminal_command() -> Command {
                 ),
         )
         .subcommand(super::title::command())
+        .subcommands(super::conditional_terminal::commands())
 }
 
 fn session_command() -> Command {
