@@ -4616,6 +4616,30 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_terminal_grows_taller_than_retained_history() {
+        let mut terminal = Terminal::new(80, 2, 10_000).unwrap();
+        terminal.write(b"\n\n");
+        terminal.scroll_viewport_delta(-1);
+        terminal.resize(80, 24, 8, 16).unwrap();
+        assert_eq!(terminal.total_rows().unwrap(), 24);
+    }
+
+    #[test]
+    fn growing_rows_while_scrolled_preserves_content() {
+        let mut terminal = Terminal::new(80, 2, 10_000).unwrap();
+        terminal.write(b"one\r\ntwo\r\nthree\r\n");
+        terminal.scroll_viewport_delta(-1);
+        terminal.resize(80, 24, 8, 16).unwrap();
+        let text = terminal
+            .read_text_viewport((0, 0), (79, 23), false)
+            .unwrap();
+        assert!(text.contains("one"));
+        assert!(text.contains("two"));
+        assert!(text.contains("three"));
+        assert_eq!(terminal.scrollbar().unwrap().offset, 0);
+    }
+
+    #[test]
     fn raw_resize_preserves_content_without_replaying_terminal_effects() {
         let mut terminal = Terminal::new(20, 6, 100_000).unwrap();
         terminal.write(b"header\r\n\x1b[6;1Htail\x1b[6;18H");
