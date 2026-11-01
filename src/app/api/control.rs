@@ -5,11 +5,22 @@ use crate::api::schema::{
 };
 use crate::app::App;
 
+mod branch;
+
 impl App {
     pub(super) fn handle_managed_job_launch(
         &mut self,
         id: String,
         params: ManagedLaunchParams,
+    ) -> String {
+        self.handle_managed_job_launch_with_layout(id, params, None)
+    }
+
+    fn handle_managed_job_launch_with_layout(
+        &mut self,
+        id: String,
+        params: ManagedLaunchParams,
+        mut branch_plan: Option<branch::BranchLaunchPlan>,
     ) -> String {
         if self.managed_jobs.jobs.len() >= 256 {
             return encode_error(id, "job_limit", "managed job receipt capacity reached");
@@ -125,6 +136,9 @@ impl App {
                 direction,
                 ratio: 0.5,
             });
+        let (rows, cols) = branch_plan
+            .as_ref()
+            .map_or((rows, cols), |plan| plan.terminal_size);
         let result = self.state.workspaces[ws_idx].split_pane_managed_argv_command(
             parent,
             direction,
@@ -150,6 +164,11 @@ impl App {
             }
             None => return encode_error(id, "terminal_not_found", "parent pane is missing"),
         };
+        if let Some(plan) = &mut branch_plan {
+            plan.layout
+                .replace_pane_identity(crate::layout::PaneId::from_raw(0), new_pane.pane_id);
+            self.state.workspaces[ws_idx].tabs[parent_tab].layout = plan.layout.clone();
+        }
         // Managed jobs are background work: a split must not change the user's
         // zoomed view. The ordinary split path deliberately reveals new panes.
         self.state.workspaces[ws_idx].tabs[parent_tab].zoomed = parent_zoomed;
@@ -193,6 +212,17 @@ impl App {
             native_request_ids: Vec::new(),
             busy: false,
         };
+        if let Some(mut plan) = branch_plan {
+            plan.branch.members.push(crate::app::control::BranchMember {
+                condition: info.condition.clone(),
+                parent_launch: plan.parent_launch,
+                retired: false,
+            });
+            self.managed_jobs
+                .branches
+                .insert(plan.branch.root.launch_id.clone(), plan.branch);
+            self.emit_layout_updated_event(ws_idx, parent_tab);
+        }
         self.managed_jobs.jobs.insert(
             job_id,
             crate::app::control::ManagedJob {

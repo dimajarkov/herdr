@@ -1096,3 +1096,372 @@ async fn managed_capabilities_accepts_trusted_endpoint_id_prefix_for_external_12
     assert_eq!(response["id"], id);
     assert_eq!(response["result"]["type"], "managed_terminal_capabilities");
 }
+
+#[tokio::test]
+async fn managed_branch_launch_refuses_zoom_before_allocation() {
+    let (mut app, parent) = app();
+    let condition = request(&mut app, "terminal.condition", json!({"pane_id":parent}))["result"]
+        ["condition"]
+        .clone();
+    app.state.workspaces[0].tabs[0].zoomed = true;
+    let response = request(
+        &mut app,
+        "terminal.job.launch_branch",
+        json!({
+            "parent": condition, "root": condition, "argv":["/bin/bash", "-c", "sleep 30"], "cwd":"/tmp"
+        }),
+    );
+    assert_eq!(response["error"]["code"], "layout_zoomed", "{response}");
+    assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
+    assert!(app.managed_jobs.jobs.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_orders_columns_and_contiguous_descendants() {
+    let (mut app, master) = app();
+    app.state.headless_size = (240, 100);
+    app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 240, 100);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    fn launch(app: &mut App, parent: &Value, root: &Value) -> Value {
+        let result = request(
+            app,
+            "terminal.job.launch_branch",
+            json!({"parent":parent,"root":root,"argv":["/bin/bash","-c","sleep 30"],"cwd":"/tmp"}),
+        );
+        assert_eq!(result["result"]["type"], "managed_terminal", "{result}");
+        result["result"]["condition"].clone()
+    }
+    let a = launch(&mut app, &root, &root);
+    let b = launch(&mut app, &root, &root);
+    let a1 = launch(&mut app, &a["terminal"], &root);
+    let a2 = launch(&mut app, &a["terminal"], &root);
+    let deep = launch(&mut app, &a1["terminal"], &root);
+    let b1 = launch(&mut app, &b["terminal"], &root);
+    let b2 = launch(&mut app, &b["terminal"], &root);
+    let c = launch(&mut app, &root, &root);
+    let snapshot: crate::api::schema::PaneLayoutSnapshot = serde_json::from_value(
+        request(&mut app, "pane.layout", json!({"pane_id":master}))["result"]["layout"].clone(),
+    )
+    .unwrap();
+    let ids: Vec<_> = snapshot.panes.iter().map(|p| p.pane_id.clone()).collect();
+    let expected: Vec<_> = [
+        &root,
+        &a["terminal"],
+        &a1["terminal"],
+        &deep["terminal"],
+        &a2["terminal"],
+        &b["terminal"],
+        &b1["terminal"],
+        &b2["terminal"],
+        &c["terminal"],
+    ]
+    .into_iter()
+    .map(|v| v["pane_id"].as_str().unwrap().to_owned())
+    .collect();
+    assert_eq!(ids, expected);
+    let panes = &snapshot.panes;
+    assert_eq!(panes[0].rect.height, 100);
+    assert_eq!(panes[1].rect.x, panes[4].rect.x);
+    assert_eq!(panes[5].rect.x, panes[7].rect.x);
+    assert!(
+        panes[0].rect.x < panes[1].rect.x
+            && panes[1].rect.x < panes[5].rect.x
+            && panes[5].rect.x < panes[8].rect.x
+    );
+    assert!(panes[1..5].windows(2).all(|p| p[0].rect.y < p[1].rect.y));
+    assert_eq!(snapshot.focused_pane_id, master);
+    for condition in [deep, a2, a1, a, b2, b1, b, c] {
+        let result = request(
+            &mut app,
+            "terminal.job.close",
+            json!({"condition":condition}),
+        );
+        assert_eq!(result["result"]["phase"], "closed", "{result}");
+    }
+    app.state.assert_invariants_for_test();
+}
+
+fn branch_launch(app: &mut App, parent: &Value, root: &Value) -> Value {
+    request(
+        app,
+        "terminal.job.launch_branch",
+        json!({"parent":parent,"root":root,"argv":["/bin/bash","-c","sleep 30"],"cwd":"/tmp"}),
+    )
+}
+
+#[tokio::test]
+async fn managed_branch_launch_capacity_and_stale_conditions_leave_layout_unchanged() {
+    let (mut app, master) = app();
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    app.state.headless_size = (80, 24);
+    let before = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let response = branch_launch(&mut app, &root, &root);
+    assert_eq!(response["error"]["code"], "layout_capacity", "{response}");
+    assert_eq!(
+        request(&mut app, "pane.layout", json!({"pane_id":master})),
+        before
+    );
+    let mut stale = root.clone();
+    stale["launch_id"] = json!("runtime_changed");
+    assert!(branch_launch(&mut app, &stale, &root)["error"].is_object());
+    assert_eq!(
+        request(&mut app, "pane.layout", json!({"pane_id":master})),
+        before
+    );
+    assert!(app.managed_jobs.jobs.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_survives_out_of_order_close_and_rejects_branch_annexation() {
+    let (mut app, master) = app();
+    app.state.headless_size = (240, 100);
+    app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 240, 100);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    let a = branch_launch(&mut app, &root, &root)["result"]["condition"].clone();
+    let b = branch_launch(&mut app, &root, &root)["result"]["condition"].clone();
+    let a1 = branch_launch(&mut app, &a["terminal"], &root)["result"]["condition"].clone();
+    let a2 = branch_launch(&mut app, &a["terminal"], &root)["result"]["condition"].clone();
+    assert!(a2.is_object());
+    let before = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    assert_eq!(
+        branch_launch(&mut app, &a["terminal"], &a["terminal"])["error"]["code"],
+        "branch_root_mismatch"
+    );
+    assert_eq!(
+        branch_launch(&mut app, &a["terminal"], &b["terminal"])["error"]["code"],
+        "branch_root_mismatch"
+    );
+    assert_eq!(
+        request(&mut app, "pane.layout", json!({"pane_id":master})),
+        before
+    );
+    assert_eq!(
+        request(&mut app, "terminal.job.close", json!({"condition":a1}))["result"]["phase"],
+        "closed"
+    );
+    let a3 = branch_launch(&mut app, &a["terminal"], &root)["result"]["condition"].clone();
+    assert!(a3.is_object());
+    let snapshot = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let ids: Vec<_> = snapshot["result"]["layout"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["pane_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            root["pane_id"].clone(),
+            a["terminal"]["pane_id"].clone(),
+            a2["terminal"]["pane_id"].clone(),
+            a3["terminal"]["pane_id"].clone(),
+            b["terminal"]["pane_id"].clone()
+        ]
+    );
+    assert_eq!(
+        request(&mut app, "terminal.job.close", json!({"condition":a}))["result"]["phase"],
+        "closed"
+    );
+    let descendant = branch_launch(&mut app, &a2["terminal"], &root)["result"]["condition"].clone();
+    assert!(
+        descendant.is_object(),
+        "surviving descendant must retain its column after parent closes"
+    );
+    let snapshot = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let ids: Vec<_> = snapshot["result"]["layout"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["pane_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            root["pane_id"].clone(),
+            a2["terminal"]["pane_id"].clone(),
+            descendant["terminal"]["pane_id"].clone(),
+            a3["terminal"]["pane_id"].clone(),
+            b["terminal"]["pane_id"].clone()
+        ]
+    );
+    for condition in [descendant, a3, a2, b] {
+        assert_eq!(
+            request(
+                &mut app,
+                "terminal.job.close",
+                json!({"condition":condition})
+            )["result"]["phase"],
+            "closed"
+        );
+    }
+    app.state.assert_invariants_for_test();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_preserves_unrelated_panes_and_foreign_focus() {
+    let (mut app, master) = app();
+    app.state.headless_size = (240, 100);
+    app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 240, 100);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    let foreign = request(
+        &mut app,
+        "terminal.job.launch",
+        json!({"parent":root,"argv":["/bin/bash","-c","sleep 30"],"cwd":"/tmp","direction":"down"}),
+    )["result"]["condition"]
+        .clone();
+    assert!(foreign.is_object());
+    request(
+        &mut app,
+        "pane.focus",
+        json!({"pane_id":foreign["terminal"]["pane_id"]}),
+    );
+    let before = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let a = branch_launch(&mut app, &root, &root)["result"]["condition"].clone();
+    let a1 = branch_launch(&mut app, &a["terminal"], &root)["result"]["condition"].clone();
+    assert!(a1.is_object());
+    let after = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let find_foreign = |snapshot: &Value| {
+        snapshot["result"]["layout"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["pane_id"] == foreign["terminal"]["pane_id"])
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find_foreign(&before), find_foreign(&after));
+    assert_eq!(
+        after["result"]["layout"]["focused_pane_id"],
+        foreign["terminal"]["pane_id"]
+    );
+    // An unowned insertion inside the managed region must not be annexed by reflow.
+    let intruder=request(&mut app,"terminal.job.launch",json!({"parent":a["terminal"],"argv":["/bin/bash","-c","sleep 30"],"cwd":"/tmp","direction":"down"}))["result"]["condition"].clone();
+    let before_refusal = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    assert_eq!(
+        branch_launch(&mut app, &root, &root)["error"]["code"],
+        "branch_layout_changed"
+    );
+    assert_eq!(
+        request(&mut app, "pane.layout", json!({"pane_id":master})),
+        before_refusal
+    );
+    for condition in [intruder, a1, a, foreign] {
+        assert_eq!(
+            request(
+                &mut app,
+                "terminal.job.close",
+                json!({"condition":condition})
+            )["result"]["phase"],
+            "closed"
+        );
+    }
+    app.state.assert_invariants_for_test();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_accepts_exact_readable_boundary_before_rejecting_next_child() {
+    let (mut app, master) = app();
+    app.state.pane_borders = crate::config::PaneBordersConfig::Off;
+    app.state.pane_outer_borders = false;
+    app.state.pane_scrollbars = false;
+    app.state.pane_gaps = false;
+    app.state.headless_size = (80, 12);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    let a = branch_launch(&mut app, &root, &root)["result"]["condition"].clone();
+    assert!(a.is_object());
+    assert_eq!(
+        branch_launch(&mut app, &root, &root)["error"]["code"],
+        "layout_capacity"
+    );
+    assert_eq!(
+        branch_launch(&mut app, &a["terminal"], &root)["error"]["code"],
+        "layout_capacity"
+    );
+    assert_eq!(
+        request(&mut app, "terminal.job.close", json!({"condition":a}))["result"]["phase"],
+        "closed"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_failed_spawn_does_not_reserve_layout_or_order() {
+    let (mut app, master) = app();
+    app.state.headless_size = (240, 100);
+    app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 240, 100);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    let before = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    let failed = request(
+        &mut app,
+        "terminal.job.launch_branch",
+        json!({"parent":root,"root":root,"argv":["/private/tmp/herdr-spec54-no-executable"],"cwd":"/tmp"}),
+    );
+    assert_eq!(failed["error"]["code"], "managed_launch_failed", "{failed}");
+    assert_eq!(
+        request(&mut app, "pane.layout", json!({"pane_id":master})),
+        before
+    );
+    let a = branch_launch(&mut app, &root, &root)["result"]["condition"].clone();
+    assert!(a.is_object());
+    let after = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    assert_eq!(
+        after["result"]["layout"]["panes"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        request(&mut app, "terminal.job.close", json!({"condition":a}))["result"]["phase"],
+        "closed"
+    );
+    app.state.assert_invariants_for_test();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_branch_launch_large_readable_layout_respects_existing_split_ratio_contract() {
+    let (mut app, master) = app();
+    app.state.headless_size = (600, 30);
+    app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 600, 30);
+    let root = request(&mut app, "terminal.condition", json!({"pane_id":master}))["result"]
+        ["condition"]
+        .clone();
+    let mut jobs = Vec::new();
+    for _ in 0..11 {
+        let launched = branch_launch(&mut app, &root, &root);
+        assert!(launched["result"]["condition"].is_object(), "{launched}");
+        jobs.push(launched["result"]["condition"].clone());
+    }
+    let layout = request(&mut app, "pane.layout", json!({"pane_id":master}));
+    for condition in jobs {
+        assert_eq!(
+            request(
+                &mut app,
+                "terminal.job.close",
+                json!({"condition":condition})
+            )["result"]["phase"],
+            "closed"
+        );
+    }
+    let splits = layout["result"]["layout"]["splits"].as_array().unwrap();
+    assert!(
+        splits
+            .iter()
+            .all(|split| (0.1..=0.9).contains(&split["ratio"].as_f64().unwrap())),
+        "{layout}"
+    );
+}

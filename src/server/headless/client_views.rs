@@ -232,6 +232,7 @@ impl HeadlessServer {
                 | Method::PaneEditScrollback(_)
                 | Method::PaneMove(_)
                 | Method::TerminalJobLaunch(_)
+                | Method::TerminalJobLaunchBranch(_)
                 | Method::TerminalJobClose(_)
                 | Method::PaneSplit(_)
                 | Method::TabClose(_)

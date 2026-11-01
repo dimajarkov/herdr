@@ -1000,6 +1000,28 @@ If entropy allocation fails, guarded operations return `terminal_identity_unavai
 
 `terminal.job.launch` takes `{parent, argv, cwd, env, direction, label?}`. The parent is an exact `TerminalCondition`; `argv` begins with an absolute executable, and `cwd` is an existing absolute directory. A fresh unfocused direct-command terminal preserves the provided script/environment and never respawns a reusable shell. A `JobCondition` is `{terminal: TerminalCondition, job_id}`. Ownership includes all processes and replacements inside that resource until explicit release. Moving, importing, restarting or replacing the resource invalidates authority. Human input does not release ownership.
 
+`terminal.job.branch_capabilities` takes `{}` and returns the existing version 1 managed capability response.
+Success with `job_ownership` and `cooperative_control` enabled advertises `terminal.job.launch_branch`; clients must refuse branch allocation when this method is unavailable, unsupported or uncertain.
+This optional method does not change `terminal.job.launch` or the stable client endpoint codecs.
+
+`terminal.job.launch_branch` takes `{parent, root, argv, cwd, env?, label?}` and returns the same managed job receipt.
+Both conditions identify exact current terminal runtimes; `parent` is the calling master or a descendant previously allocated under `root` by this method.
+The server owns ancestry and accepted launch order: direct children become right-hand columns, while all deeper descendants stay downward in their branch, in contiguous depth-first sibling order.
+Concurrent requests are admitted atomically against current server state, including a new root child after nested launches.
+Only the exact managed layout region is reflowed, preserving unrelated panes, keyboard focus and focus history.
+Moved or replaced members, foreign layout insertions, stale identities and zoomed tabs are rejected before allocating a process.
+Managed close and natural exit remove only the verified job; surviving descendants retain their branch ordering on subsequent launches.
+An explicitly released pane remains in its position but cannot launch further managed descendants; further branch reflow refuses to move that unowned resource.
+
+The candidate branch readability policy requires at least **40 usable terminal columns and 12 usable terminal rows** for every affected pane, including the master.
+This is a new branch-launch admission policy, not a pre-existing Herdr or Pi terminal-size guarantee.
+It uses Herdr's layout geometry, configured pane borders/gaps and scrollbar gutter; it exceeds the lower PTY safety floors.
+Insufficient space returns `layout_capacity` before process allocation or layout mutation, with no overflow tab, extra nested column or hidden fallback.
+Other refusal codes include `layout_zoomed`, `branch_root_mismatch`, `branch_parent_mismatch` and `branch_layout_changed`, in addition to the existing terminal identity and launch errors.
+The ancestry registry retains at most 256 live members and necessary ancestral anchors per root (`branch_limit` on exhaustion), pruning retired subtrees once no descendants remain.
+The ancestry registry is ephemeral like managed receipts; server restart never authorizes reconstruction from pane names or guessed cleanup.
+Do not retry an ambiguous launch or close a guessed pane.
+
 `terminal.job.get`, `terminal.job.close` and `terminal.job.release` take `{condition: JobCondition}`; `terminal.job.rename` also accepts `label`. Close uses existing protection checks and never forces or follows aliases. Release synchronously revokes enrollment/control and retains the pane; a late wrapper exit cannot remove it. Natural exit retains an exit receipt before protected cleanup, and cleanup refusals appear in `diagnostic`. Receipts are ephemeral, bounded and do not survive server restart.
 
 The flat `managed_terminal` result contains `condition`, `phase`, `agent`, `exit`, `diagnostic`, `native_scope_id`, `native_request_ids` and `busy`. `agent: null` means no route. A newly enrolled route stays unavailable for input until a valid native observation arrives.

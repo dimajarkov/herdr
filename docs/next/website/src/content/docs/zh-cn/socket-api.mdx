@@ -800,6 +800,20 @@ ID 用于关联运行时，不是认证秘密，也不授予权限。
 
 `terminal.job.capabilities` 公布 version 1 的任务所有权与协作控制能力。初始仅支持 macOS；不支持时在启动前拒绝，不回退到传统 PTY 输入。`terminal.job.launch` 接受 `{parent, argv, cwd, env, direction, label?}`，创建新的直接执行终端。所有权覆盖该任务资源内的所有进程，直到显式释放。移动、重启或替换终端会使权限失效；人工输入不会自动释放。
 
+`terminal.job.branch_capabilities` 接受 `{}`，返回现有 version 1 管理能力响应。
+仅当成功响应启用 `job_ownership` 和 `cooperative_control` 时，才表示支持新增的 `terminal.job.launch_branch`。
+方法缺失、不支持或响应不确定时必须拒绝分配，不能退回旧启动方式。
+`terminal.job.launch_branch` 接受 `{parent, root, argv, cwd, env?, label?}`，返回原有格式的管理任务记录。
+`parent` 和 `root` 必须是精确的当前终端条件；父节点必须是根节点或该根已登记的后代。
+服务器管理亲子关系和接受顺序：直接子节点放在右侧独立列中，更深后代向下排列在同一列内，兄弟子树按深度优先顺序保持连续。
+操作原子地保留无关窗格、焦点和焦点历史；移动、替换、外部布局修改、缩放或过期条件会在进程分配前被拒绝。
+新的候选可读性策略要求包括主窗格在内的每个受影响终端，在扣除边框、间距和滚动条后至少有 **40 列、12 行**。
+空间不足返回 `layout_capacity`，缩放返回 `layout_zoomed`，根、父或布局不匹配返回 `branch_root_mismatch`、`branch_parent_mismatch` 或 `branch_layout_changed`，不会创建溢出标签页或不可见进程。
+这是新的分支启动策略，并非已有 PTY 最低尺寸保证。
+验证完成的退出和 close 后，下一次启动仍保留存活后代的分支顺序；release 保留窗格但拒绝从该父节点启动新的后代。
+亲子登记和任务记录均为临时状态；重启后不得根据窗格名称猜测权限，也不得重试结果不确定的启动或清理猜测的窗格。
+原有 `terminal.job.launch` 语义和固定客户端编码保持不变。
+
 `JobCondition` 为 `{terminal: TerminalCondition, job_id}`。`terminal.job.get/close/release` 接受 `{condition}`，`rename` 还接受 `label`。close 保留现有关闭保护。release 撤销注册与控制并保留终端，迟到的退出事件不会删除它。退出记录与保护拒绝保存在 `exit` 和 `diagnostic`；记录有容量限制且不跨服务器重启。
 
 控制使用仅注入子进程环境的一次性注册能力，并验证同一本地 JSON 套接字的内核 PID、UID、进程出生标记及其原始终端归属。注册后的 `{job, connection, epoch, session}` 不可变。首次有效原生观察前、断开后或会话变化后均不能发送。不支持重连、继任进程重新注册或 PTY 回退。
