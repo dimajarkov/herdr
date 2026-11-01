@@ -66,21 +66,14 @@ impl App {
             Ok(env) => env,
             Err((code, message)) => return encode_error(id, &code, message),
         };
-        let Some((parent_ws, parent_pane)) =
-            self.parse_current_public_pane_id(&params.parent.pane_id)
+        let Some((ws_idx, parent)) = self.parse_current_public_pane_id(&params.parent.pane_id)
         else {
             return encode_error(id, "terminal_not_found", "parent pane missing");
         };
-        if self.state.workspaces[parent_ws]
-            .find_tab_index_for_pane(parent_pane)
-            .is_some_and(|tab| self.state.workspaces[parent_ws].tabs[tab].zoomed)
-        {
-            return encode_error(
-                id,
-                "managed_parent_zoomed",
-                "managed split requires an unzoomed parent; no launch or focus change performed",
-            );
-        }
+        let Some(parent_tab) = self.state.workspaces[ws_idx].find_tab_index_for_pane(parent) else {
+            return encode_error(id, "terminal_not_found", "parent tab missing");
+        };
+        let parent_zoomed = self.state.workspaces[ws_idx].tabs[parent_tab].zoomed;
         let job_id = match crate::app::control::random_identity("job_") {
             Ok(id) => id,
             Err(_) => {
@@ -120,10 +113,6 @@ impl App {
                 crate::api::socket_path().display().to_string(),
             ),
         ]);
-        let Some((ws_idx, parent)) = self.parse_current_public_pane_id(&params.parent.pane_id)
-        else {
-            return encode_error(id, "terminal_not_found", "parent pane is missing");
-        };
         let direction = match params.direction {
             crate::api::schema::SplitDirection::Right => ratatui::layout::Direction::Horizontal,
             crate::api::schema::SplitDirection::Down => ratatui::layout::Direction::Vertical,
@@ -161,6 +150,9 @@ impl App {
             }
             None => return encode_error(id, "terminal_not_found", "parent pane is missing"),
         };
+        // Managed jobs are background work: a split must not change the user's
+        // zoomed view. The ordinary split path deliberately reveals new panes.
+        self.state.workspaces[ws_idx].tabs[parent_tab].zoomed = parent_zoomed;
         let pane_id = new_pane.pane_id;
         let mut terminal = new_pane.terminal;
         if let Some(label) = params.label {
@@ -376,7 +368,7 @@ impl App {
                 "managed ownership or runtime changed; no close performed",
             );
         }
-        if let Err(response) = self.close_pane(
+        if let Err(response) = self.close_managed_pane(
             id.clone(),
             &PaneTarget {
                 pane_id: params.condition.terminal.pane_id,
@@ -401,6 +393,10 @@ impl App {
                 job: Box::new(job.info.clone()),
             },
         )
+    }
+
+    fn close_managed_pane(&mut self, id: String, target: &PaneTarget) -> Result<(), String> {
+        self.close_pane_with_zoom_policy(id, target, true)
     }
 
     pub(super) fn handle_managed_job_rename(
@@ -501,7 +497,7 @@ impl App {
             return;
         }
         job.info.phase = ManagedJobPhase::Exited;
-        if let Err(response) = self.close_pane(
+        if let Err(response) = self.close_managed_pane(
             "managed-exit".into(),
             &PaneTarget {
                 pane_id: condition.terminal.pane_id,

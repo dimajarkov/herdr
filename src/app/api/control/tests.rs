@@ -22,6 +22,19 @@ fn app() -> (App, String) {
     let public = app.public_pane_id(0, pane).unwrap();
     (app, public)
 }
+fn assert_latest_layout_matches_snapshot(app: &App) {
+    let events = app.event_hub.events_after(0);
+    let layout = events
+        .iter()
+        .rev()
+        .find_map(|(_, event)| match &event.data {
+            crate::api::schema::EventData::LayoutUpdated { layout } => Some(layout),
+            _ => None,
+        })
+        .expect("managed cleanup must publish its final layout");
+    assert_eq!(Some(layout), app.pane_layout_snapshot(0, 0).as_ref());
+}
+
 fn request(app: &mut App, method: &str, params: Value) -> Value {
     let request =
         serde_json::from_value(json!({"id":"managed-test","method":method,"params":params}))
@@ -579,13 +592,88 @@ async fn managed_job_protected_close_retains_ownership_and_diagnostic() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-async fn managed_job_zoomed_parent_rejects_before_launch_without_focus_change() {
+async fn managed_job_zoomed_parent_launches_without_focus_or_zoom_change() {
+    for (direction, placement) in [
+        ("right", "foreground"),
+        ("down", "workspace"),
+        ("right", "tab"),
+        ("down", "other-pane"),
+    ] {
+        let (mut app, parent) = app();
+        let root = std::env::temp_dir().join(format!(
+            "herdr-managed-zoom-{}-{placement}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let script = root.join("launch.sh");
+        std::fs::write(&script, "printf launched > sidecar; exec /bin/sleep 30\n").unwrap();
+        app.state.workspaces[0].tabs[0].zoomed = true;
+        match placement {
+            "workspace" => {
+                app.state
+                    .workspaces
+                    .push(crate::workspace::Workspace::test_new("foreground"));
+                app.state.active = Some(1);
+            }
+            "tab" => {
+                let tab = app.state.workspaces[0].test_add_tab(Some("foreground"));
+                app.state.workspaces[0].active_tab = tab;
+            }
+            "other-pane" => {
+                let other =
+                    app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+                app.state.workspaces[0].tabs[0].layout.focus_pane(other);
+            }
+            _ => {}
+        }
+        app.state.ensure_test_terminals();
+        let active = app.state.active;
+        let active_tab = app.state.workspaces[0].active_tab;
+        let focus = app.state.workspaces[0].tabs[0].layout.focused();
+        let condition = request(&mut app, "terminal.condition", json!({"pane_id":parent}))
+            ["result"]["condition"]
+            .clone();
+        let result = request(
+            &mut app,
+            "terminal.job.launch",
+            json!({"parent":condition,"argv":["/bin/bash",script],"cwd":root,"env":{},"direction":direction}),
+        );
+        assert_eq!(result["result"]["type"], "managed_terminal", "{result}");
+        assert_eq!(app.state.workspaces[0].active_tab, active_tab);
+        assert_eq!(app.state.active, active);
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), focus);
+        assert!(app.state.workspaces[0].tabs[0].zoomed);
+        let child = result["result"]["condition"].clone();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !root.join("sidecar").exists() {
+            assert!(Instant::now() < deadline, "zoomed job did not execute");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let closed = request(&mut app, "terminal.job.close", json!({"condition":child}));
+        assert_eq!(closed["result"]["phase"], "closed", "{closed}");
+        assert_eq!(app.state.workspaces[0].active_tab, active_tab);
+        assert_eq!(app.state.active, active);
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), focus);
+        assert!(
+            app.state.workspaces[0].tabs[0].zoomed,
+            "hidden child cleanup unzoomed parent"
+        );
+        assert_latest_layout_matches_snapshot(&app);
+        app.state.assert_invariants_for_test();
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_job_zoomed_launch_failure_preserves_layout_and_ownership() {
     let (mut app, parent) = app();
-    let root = std::env::temp_dir().join(format!("herdr-managed-zoom-{}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("herdr-managed-zoom-failure-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let root = std::fs::canonicalize(root).unwrap();
-    let script = root.join("launch.sh");
-    std::fs::write(&script, "printf launched > sidecar; sleep 30\n").unwrap();
     app.state.workspaces[0].tabs[0].zoomed = true;
     let before = request(&mut app, "pane.list", json!({}));
     let condition = request(&mut app, "terminal.condition", json!({"pane_id":parent}))["result"]
@@ -594,14 +682,68 @@ async fn managed_job_zoomed_parent_rejects_before_launch_without_focus_change() 
     let result = request(
         &mut app,
         "terminal.job.launch",
-        json!({"parent":condition,"argv":["/bin/bash",script],"cwd":root,"env":{},"direction":"right"}),
+        json!({"parent":condition,"argv":[root.join("nonexistent-command")],"cwd":root,"env":{},"direction":"right"}),
     );
-    assert_eq!(result["error"]["code"], "managed_parent_zoomed", "{result}");
+    assert_eq!(result["error"]["code"], "managed_launch_failed", "{result}");
     assert_eq!(request(&mut app, "pane.list", json!({})), before);
     assert!(app.state.workspaces[0].tabs[0].zoomed);
-    assert!(!root.join("sidecar").exists());
+    assert!(app.managed_jobs.jobs.is_empty());
+    assert_eq!(app.terminal_runtimes.len(), 1);
+    app.state.assert_invariants_for_test();
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_job_zoomed_exit_preserves_only_a_surviving_zoomed_pane() {
+    for focus_child in [false, true] {
+        let (mut app, parent) = app();
+        let root = std::env::temp_dir().join(format!(
+            "herdr-managed-zoom-exit-{}-{focus_child}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let script = root.join("launch.sh");
+        std::fs::write(&script, "sleep 0.1; exit 7\n").unwrap();
+        app.state.workspaces[0].tabs[0].zoomed = true;
+        let condition = request(&mut app, "terminal.condition", json!({"pane_id":parent}))
+            ["result"]["condition"]
+            .clone();
+        let launched = request(
+            &mut app,
+            "terminal.job.launch",
+            json!({"parent":condition,"argv":["/bin/bash",script],"cwd":root,"env":{},"direction":"right"}),
+        );
+        assert_eq!(launched["result"]["type"], "managed_terminal", "{launched}");
+        let condition = launched["result"]["condition"].clone();
+        if focus_child {
+            let (_, child) = app
+                .parse_current_public_pane_id(condition["terminal"]["pane_id"].as_str().unwrap())
+                .unwrap();
+            app.state.workspaces[0].tabs[0].layout.focus_pane(child);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = request(&mut app, "terminal.job.get", json!({"condition":condition}));
+            if status["result"]["phase"] == "exited" {
+                assert_eq!(status["result"]["exit"]["code"], 7, "{status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "{status}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(app.state.workspaces[0].tabs[0].zoomed, !focus_child);
+        assert_latest_layout_matches_snapshot(&app);
+        assert_eq!(
+            request(&mut app, "pane.get", json!({"pane_id":parent}))["result"]["pane"]["focused"],
+            true
+        );
+        app.state.assert_invariants_for_test();
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(target_os = "macos")]

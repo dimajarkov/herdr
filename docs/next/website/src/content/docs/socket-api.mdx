@@ -1025,7 +1025,9 @@ herdr terminal job close --condition job.json
 
 The condition file accepts a bare `JobCondition` or the full managed launch/get response. Older servers missing these distinct methods fail closed. Existing terminal-runtime guards retain their weaker scope and are insufficient for agent process replacement protection.
 
-Managed resources, including released retained panes, cannot be transferred by live handoff in version 1 (`managed_handoff_unsupported`); ordinary endpoints remain available. Close the resource before handoff. Receipts expire 30 minutes after the original runtime disappears, never while that runtime remains present. A full ledger does not evict a live resource. Managed launch rejects a zoomed parent before allocation and does not automatically unzoom or steal focus.
+Managed resources, including released retained panes, cannot be transferred by live handoff in version 1 (`managed_handoff_unsupported`); ordinary endpoints remain available. Close the resource before handoff. Receipts expire 30 minutes after the original runtime disappears, never while that runtime remains present. A full ledger does not evict a live resource. Managed launch accepts a zoomed parent without changing focus or zoom.
+The child executes in the background, and closing it or recording its natural exit preserves a surviving foreground pane's zoom.
+A failed launch leaves the original layout and zoom unchanged.
 
 The generic initial JSON ingress retains its legacy 1MiB read/decode limit for method classification. Every new managed/control request is refused above 16KiB before dispatch; enrolled stream frames have the same 16KiB bound. Initial malformed-request errors preserve their error code/shape with sanitized line/column diagnostics and bounded correlation IDs, excluding raw input or parser value prose.
 
