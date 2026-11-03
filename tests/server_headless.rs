@@ -612,6 +612,86 @@ fn server_survives_hangup_and_logs_why_it_stops() {
 }
 
 #[test]
+fn zoomed_parent_runs_managed_children_through_public_socket() {
+    use serde_json::{json, Value};
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let spawned = spawn_server(
+        &base.join("config"),
+        &runtime_dir,
+        &api_socket,
+        &runtime_dir.join("herdr-client.sock"),
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    let request = |method: &str, params: Value| -> Value {
+        let mut stream = UnixStream::connect(&api_socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        writeln!(
+            stream,
+            "{}",
+            json!({"id":"zoom-acceptance","method":method,"params":params})
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert!(response.get("error").is_none(), "{method}: {response}");
+        response["result"].clone()
+    };
+    let created = request("workspace.create", json!({"cwd":base,"focus":true}));
+    let parent = created["root_pane"]["pane_id"].as_str().unwrap();
+    request(
+        "pane.split",
+        json!({"pane_id":parent,"direction":"right","focus":false,"cwd":base}),
+    );
+    let zoom = request("pane.zoom", json!({"pane_id":parent,"mode":"on"}));
+    assert_eq!(zoom["zoom"]["zoomed"], true, "{zoom}");
+    let condition = request("terminal.condition", json!({"pane_id":parent}))["condition"].clone();
+    let before = request("pane.layout", json!({"pane_id":parent}));
+    let mut children = Vec::new();
+    for direction in ["right", "down"] {
+        let script = base.join(format!("{direction}.sh"));
+        fs::write(
+            &script,
+            format!("printf launched > {direction}.marker; exec /bin/sleep 30\n"),
+        )
+        .unwrap();
+        let launched = request(
+            "terminal.job.launch",
+            json!({"parent":condition,"argv":["/bin/sh",script],"cwd":base,"env":{},"direction":direction}),
+        );
+        children.push(launched["condition"].clone());
+    }
+    for direction in ["right", "down"] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !base.join(format!("{direction}.marker")).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "hidden {direction} child never executed"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let during = request("pane.layout", json!({"pane_id":parent}));
+    assert_eq!(during["layout"]["zoomed"], true);
+    assert_eq!(during["layout"]["focused_pane_id"], parent);
+    for child in children {
+        let closed = request("terminal.job.close", json!({"condition":child}));
+        assert_eq!(closed["phase"], "closed");
+    }
+    assert_eq!(request("pane.layout", json!({"pane_id":parent})), before);
+    cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
 fn server_stop_request_logs_its_caller() {
     let _lock = test_lock();
     let base = unique_test_dir();

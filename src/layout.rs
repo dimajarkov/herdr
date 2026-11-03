@@ -70,6 +70,7 @@ pub enum NavDirection {
 }
 
 /// A node in the BSP tree. Public for serialization.
+#[derive(Clone)]
 pub enum Node {
     Pane(PaneId),
     Split {
@@ -81,6 +82,7 @@ pub enum Node {
 }
 
 /// BSP tiling layout. Tracks a tree of splits and a focused pane.
+#[derive(Clone)]
 pub struct TileLayout {
     root: Node,
     focus: PaneId,
@@ -345,6 +347,39 @@ impl TileLayout {
         let mut ids = Vec::new();
         collect_ids(&self.root, &mut ids);
         ids
+    }
+
+    /// Replace one exact contiguous region without touching outside geometry or focus history.
+    /// The ordered leaves must match, so a foreign insertion or move fails closed.
+    pub(crate) fn replace_region(&mut self, ordered: &[PaneId], replacement: Node) -> bool {
+        fn find<'a>(node: &'a mut Node, ordered: &[PaneId]) -> Option<&'a mut Node> {
+            let mut ids = Vec::new();
+            collect_ids(node, &mut ids);
+            if ids == ordered {
+                return Some(node);
+            }
+            if let Node::Split { first, second, .. } = node {
+                if let Some(found) = find(first, ordered) {
+                    return Some(found);
+                }
+                return find(second, ordered);
+            }
+            None
+        }
+        if ordered.is_empty() {
+            return false;
+        }
+        let Some(node) = find(&mut self.root, ordered) else {
+            return false;
+        };
+        *node = replacement;
+        true
+    }
+
+    pub(crate) fn replace_pane_identity(&mut self, old: PaneId, new: PaneId) {
+        if let Some(node) = find_pane_mut(&mut self.root, old) {
+            *node = Node::Pane(new);
+        }
     }
 
     /// Access the tree root for serialization.
@@ -1344,5 +1379,49 @@ mod tests {
         assert_eq!(layout.focused(), pane(4));
         assert!(layout.close_focused());
         assert_eq!(layout.focused(), pane(2));
+    }
+}
+
+#[cfg(test)]
+mod managed_region_tests {
+    use super::*;
+
+    #[test]
+    fn region_reflow_preserves_foreign_geometry_focus_and_history() {
+        let (mut layout, root) = TileLayout::new();
+        let foreign = layout.split_pane(root, Direction::Horizontal, 0.7).unwrap();
+        layout.set_focus(foreign);
+        layout.set_focus(root);
+        let area = Rect::new(0, 0, 200, 90);
+        let foreign_before = layout
+            .panes(area)
+            .into_iter()
+            .find(|p| p.id == foreign)
+            .unwrap()
+            .rect;
+        let child = PaneId::alloc();
+        assert!(layout.replace_region(
+            &[root],
+            Node::Split {
+                direction: Direction::Vertical,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(root)),
+                second: Box::new(Node::Pane(child))
+            }
+        ));
+        assert_eq!(layout.focused(), root);
+        assert_eq!(
+            layout
+                .panes(area)
+                .into_iter()
+                .find(|p| p.id == foreign)
+                .unwrap()
+                .rect,
+            foreign_before
+        );
+        assert!(!layout.replace_region(&[root, foreign], Node::Pane(root)));
+        assert_eq!(layout.pane_ids(), vec![root, child, foreign]);
+        assert!(layout.close_focused());
+        assert_eq!(layout.focused(), foreign);
     }
 }

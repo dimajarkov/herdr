@@ -1965,6 +1965,15 @@ impl App {
 
     /// Close a pane; `Err` carries the encoded error response.
     pub(super) fn close_pane(&mut self, id: String, target: &PaneTarget) -> Result<(), String> {
+        self.close_pane_with_zoom_policy(id, target, false)
+    }
+
+    pub(super) fn close_pane_with_zoom_policy(
+        &mut self,
+        id: String,
+        target: &PaneTarget,
+        preserve_background_zoom: bool,
+    ) -> Result<(), String> {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
             return Err(pane_not_found(id, &target.pane_id));
         };
@@ -1992,7 +2001,23 @@ impl App {
             let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
                 return Err(pane_not_found(id, &target.pane_id));
             };
-            ws.close_pane(pane_id)
+            let zoomed_focus = ws.find_tab_index_for_pane(pane_id).and_then(|idx| {
+                let tab = &ws.tabs[idx];
+                let focused = tab.layout.focused();
+                (preserve_background_zoom && tab.zoomed && focused != pane_id).then_some(focused)
+            });
+            let closes_workspace = ws.close_pane(pane_id);
+            if let Some(focused) = zoomed_focus {
+                if let Some(idx) = ws.find_tab_index_for_pane(focused) {
+                    let tab = &mut ws.tabs[idx];
+                    // Restore before hooks, events or snapshots can observe a
+                    // transient unzoom. Closing the zoomed pane stays unzoomed.
+                    if tab.layout.focused() == focused {
+                        tab.zoomed = true;
+                    }
+                }
+            }
+            closes_workspace
         };
         self.state.remove_plugin_pane_records([pane_id]);
         if should_close_workspace {

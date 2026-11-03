@@ -40,6 +40,29 @@ impl std::fmt::Debug for ManagedLaunchParams {
             .finish()
     }
 }
+/// Branch placement is a separately negotiated method; legacy launch stays unchanged.
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedBranchLaunchParams {
+    pub parent: TerminalCondition,
+    pub root: TerminalCondition,
+    pub argv: Vec<String>,
+    pub cwd: String,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+impl std::fmt::Debug for ManagedBranchLaunchParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedBranchLaunchParams")
+            .field("parent", &self.parent)
+            .field("root", &self.root)
+            .field("argv_count", &self.argv.len())
+            .field("env", &"[redacted]")
+            .finish()
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedJobParams {

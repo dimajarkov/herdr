@@ -228,3 +228,37 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 validate row growth after viewport normalization
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-validate-row-growth-after-viewport-normalization.patch`
+
+herdr issue: none; exposed while verifying https://github.com/dimajarkov/dotfiles/issues/56
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+
+reason: Growing a scrolled terminal updates its active row count before allocating the additional rows.
+Intermediate `grow()` integrity checks see a temporarily short pinned viewport and abort Debug builds before resize can normalize it.
+Use the existing scoped integrity-check pause during this multi-step row-growth transition.
+The enclosing resize still checks the final state after normalization, and terminal content and viewport assertions remain enabled.
+The regression reproduces on the unchanged vendored baseline when an 80x2 scrolled terminal grows to 80x24.
+
+remove when: the vendored source supports row growth while scrolled without intermediate integrity failure and both regression tests below pass in Debug without this patch.
+
+verification:
+
+```sh
+just test-one growing_rows_while_scrolled_preserves_content
+just test-one client_shell_text_input_renders_only_when_resetting_scrollback
+just maintenance-test
+```

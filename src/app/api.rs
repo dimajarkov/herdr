@@ -1230,6 +1230,12 @@ impl App {
             Method::AgentSendKeys(params) => {
                 return self.handle_agent_send_keys(request.id, params);
             }
+            Method::TerminalJobBranchCapabilities(_) => {
+                return self.handle_managed_job_capabilities(request.id)
+            }
+            Method::TerminalJobLaunchBranch(params) => {
+                return self.handle_managed_branch_launch(request.id, params)
+            }
             Method::TerminalJobLaunch(params) => {
                 return self.handle_managed_job_launch(request.id, params)
             }

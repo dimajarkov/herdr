@@ -4,6 +4,18 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub(crate) struct ManagedJobs {
     pub jobs: HashMap<String, ManagedJob>,
+    pub branches: HashMap<String, ManagedBranch>,
+}
+#[derive(Clone)]
+pub(crate) struct ManagedBranch {
+    pub root: crate::api::schema::TerminalCondition,
+    pub members: Vec<BranchMember>,
+}
+#[derive(Clone)]
+pub(crate) struct BranchMember {
+    pub condition: JobCondition,
+    pub parent_launch: String,
+    pub retired: bool,
 }
 pub(crate) struct ManagedJob {
     pub info: ManagedTerminalInfo,
@@ -79,6 +91,27 @@ impl ManagedJobs {
         live: &std::collections::HashSet<String>,
         now: std::time::Instant,
     ) {
+        for branch in self.branches.values_mut() {
+            for member in &mut branch.members {
+                if self.jobs.get(&member.condition.job_id).is_some_and(|job| {
+                    matches!(
+                        job.info.phase,
+                        crate::api::schema::ManagedJobPhase::Closed
+                            | crate::api::schema::ManagedJobPhase::Exited
+                    )
+                }) && !live.contains(&member.condition.terminal.launch_id)
+                {
+                    member.retired = true;
+                }
+            }
+        }
+        self.branches.retain(|_, branch| {
+            live.contains(&branch.root.launch_id)
+                || branch
+                    .members
+                    .iter()
+                    .any(|member| live.contains(&member.condition.terminal.launch_id))
+        });
         self.jobs.retain(|_, job| {
             if live.contains(&job.info.condition.terminal.launch_id) {
                 job.absent_since = None;

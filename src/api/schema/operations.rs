@@ -181,6 +181,7 @@ mod tests {
             "agent.prompt",
             "agent.send_keys",
             "terminal.job.launch",
+            "terminal.job.launch_branch",
             "terminal.job.close",
             "terminal.job.rename",
             "terminal.rename_if",

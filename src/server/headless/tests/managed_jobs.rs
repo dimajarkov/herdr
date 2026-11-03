@@ -72,3 +72,13 @@ async fn managed_job_live_handoff_rejects_owned_and_released_runtime_but_not_tom
     drop(server);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn managed_branch_capability_is_optional_and_preserves_legacy_response_contract() {
+    let mut server = test_headless_server();
+    let legacy = request(&mut server, "terminal.job.capabilities", json!({}));
+    let branch = request(&mut server, "terminal.job.branch_capabilities", json!({}));
+    assert_eq!(branch, legacy);
+    assert_eq!(branch["result"]["version"], 1);
+    assert_eq!(branch["result"]["type"], "managed_terminal_capabilities");
+}

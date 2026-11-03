@@ -273,8 +273,14 @@ mod tests {
             "/tests/fixtures/endpoint-managed-control-method-shapes-v1.json"
         )))
         .expect("managed control method shape fixture");
+        let branch: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-managed-branch-method-shapes-v1.json"
+        )))
+        .expect("managed branch method fixture");
         for (method, digest) in managed
             .into_iter()
+            .chain(branch)
             .filter(|(method, _)| method.starts_with("terminal.job."))
         {
             assert_eq!(
@@ -305,6 +311,12 @@ mod tests {
             "/tests/fixtures/endpoint-managed-control-method-shapes-v1.json"
         )))
         .expect("managed control fixture");
+        let branch: BTreeMap<String, String> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-managed-branch-method-shapes-v1.json"
+        )))
+        .expect("managed branch method fixture");
+        let expected: BTreeMap<_, _> = expected.into_iter().chain(branch).collect();
         assert_eq!(
             actual,
             expected,

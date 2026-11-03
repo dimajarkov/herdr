@@ -806,6 +806,21 @@ ID はランタイムの対応付けに使用され、認証シークレット�
 
 `terminal.job.capabilities` は管理ジョブと協調制御の version 1 機能を公開します。初期対応は macOS のみです。未対応の場合は起動前に拒否し、従来の PTY 入力へ切り替えません。`terminal.job.launch` の `{parent, argv, cwd, env, direction, label?}` は新しい直接実行端末を作成します。所有権は明示的に解放されるまで、そのジョブ内の全プロセスに及びます。端末の移動・再起動・置換で権限は失効し、人間の入力だけでは解放されません。
 
+`terminal.job.branch_capabilities` は `{}` を受け取り、既存の version 1 管理機能レスポンスを返します。
+`job_ownership` と `cooperative_control` が有効な成功応答だけが、追加の `terminal.job.launch_branch` の対応を示します。
+未対応・不明な応答では起動せず、従来の起動方法へフォールバックしません。
+`terminal.job.launch_branch` の引数は `{parent, root, argv, cwd, env?, label?}` で、既存と同じ管理ジョブ記録を返します。
+`parent` と `root` は正確な現在の端末条件で、親はルート自身か、このルートに登録済みの子孫である必要があります。
+サーバーは受理順と親子関係を管理し、直接の子を右の列に、深い子孫を同じ列の下に、深さ優先の連続した兄弟順で配置します。
+無関係なペインとフォーカスを維持し、移動・置換・外部レイアウト変更・ズーム・古い条件はプロセス作成前に拒否します。
+新しい候補の可読性ポリシーは、マスターを含む対象ペインごとに枠・間隔・スクロールバーを除いた端末領域で **40 列、12 行** 以上を要求します。
+不足時は `layout_capacity`、ズーム時は `layout_zoomed`、親子・配置の不一致は `branch_root_mismatch`、`branch_parent_mismatch`、`branch_layout_changed` を返し、別タブや不可視プロセスには逃がしません。
+これは既存の PTY 最低寸法とは別の新しい起動ポリシーです。
+検証済みの終了・close 後も、残る子孫の順序を次の起動時に維持します。
+release はペインを残しますが、その親からの新たな子孫起動を拒否します。
+系統情報は一時的で、再起動後に名前から権限を復元せず、不明な起動を再試行したり推測したペインを削除したりしません。
+既存の `terminal.job.launch` と固定クライアントコーデックは変わりません。
+
 `JobCondition` は `{terminal: TerminalCondition, job_id}` です。`terminal.job.get/close/release` は `{condition}` を受け取り、`rename` は `label` も受け取ります。close は既存の保護を維持します。release は制御・登録を失効させて端末を残し、遅れた終了通知でも削除しません。終了結果と保護による拒否は `exit` と `diagnostic` に残ります。情報は一時的かつ容量制限付きで、サーバー再起動をまたぎません。
 
 制御には子環境だけへ注入される一回限りの登録能力と、同じローカル JSON ソケットの PID・UID・開始時刻・元の端末への所属検証が必要です。登録後の `{job, connection, epoch, session}` は不変です。初回観測前、切断後、セッション変更後は送信できません。再接続や PTY フォールバックはありません。
